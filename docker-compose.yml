@@ -1,0 +1,21 @@
+version: '3.8'
+
+services:
+  mellowtel-analyzer:
+    build: .
+    container_name: mellowtel-network-analyzer
+    volumes:
+      # Mount output directory to persist network logs
+      - ./output:/app/output
+      # Optional: Mount extension file if you have it
+      # - ./IdleForest.crx:/app/IdleForest.crx
+      # Optional: Mount sites.txt to update without rebuilding
+      - ./sites.txt:/app/sites.txt
+    environment:
+      # Configurable environment variables
+      - DWELL_TIME=60  # Seconds to wait on each page
+      - HEADLESS=true  # Run Chrome in headless mode
+      - DISABLE_IMAGES=false  # Set to true to disable image loading for faster execution
+    shm_size: 2gb  # Increase shared memory size for Chrome
+    security_opt:
+      - seccomp:unconfined  # Required for Chrome sandbox in some environments

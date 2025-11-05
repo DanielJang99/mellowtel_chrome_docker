@@ -1,0 +1,11 @@
+selenium==4.15.2
+selenium-wire==5.1.0
+blinker==1.7.0
+certifi==2023.11.17
+h11==0.14.0
+hyperframe==6.0.1
+kaitaistruct==0.10
+pyOpenSSL==23.3.0
+pyasn1==0.5.1
+wsproto==1.2.0
+zstandard==0.22.0
