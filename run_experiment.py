@@ -271,151 +271,87 @@ class NetworkAnalyzer:
         except Exception as e:
             print(f"[WARNING] Error enabling extension: {e}")
 
-    def click_extension_in_toolbar(self):
-        """
-        Click the extension icon in the Chrome toolbar using CDP.
-        This simulates clicking the extension icon from the browser toolbar.
-        """
-        if not self.extension_id:
-            print("[WARNING] Extension ID not available. Skipping activation.")
-            return
-
-        try:
-            print(f"[INFO] Clicking extension icon in browser toolbar...")
-
-            # Use CDP to click the extension action
-            # This triggers the extension popup as if clicked from toolbar
-            self.driver.execute_cdp_cmd('Extensions.executeScript', {
-                'extensionId': self.extension_id,
-                'scriptSource': 'chrome.action.openPopup();'
-            })
-
-            print(f"[SUCCESS] Extension icon clicked via CDP")
-            time.sleep(2)
-
-        except Exception as e:
-            print(f"[WARNING] CDP method failed: {e}, trying alternative method...")
-            # Fallback: open popup URL directly
-            self.open_extension_popup_url()
-
-    def open_extension_popup_url(self):
-        """
-        Fallback method: Open extension popup by navigating to its URL.
-        """
-        try:
-            popup_url = f"chrome-extension://{self.extension_id}/popup.html"
-            print(f"[INFO] Opening extension popup URL: {popup_url}")
-
-            original_window = self.driver.current_window_handle
-
-            # Open popup in new tab
-            self.driver.execute_script(f"window.open('{popup_url}', '_blank');")
-            time.sleep(2)
-
-            windows = self.driver.window_handles
-            if len(windows) > 1:
-                self.driver.switch_to.window(windows[-1])
-                print(f"[SUCCESS] Opened extension popup in new tab")
-            else:
-                print("[WARNING] Could not open extension popup")
-
-        except Exception as e:
-            print(f"[ERROR] Failed to open extension popup: {e}")
-
     def activate_extension(self):
         """
-        Activate the IdleForest extension by opening its popup URL twice.
+        Activate the IdleForest extension by navigating to its popup URL and clicking "Start Planting".
         """
         if not self.extension_id:
             print("[WARNING] Extension ID not available. Skipping activation.")
-            return
+            return False
 
         try:
             print(f"[INFO] Activating IdleForest extension...")
 
-            # Save current window handle
-            original_window = self.driver.current_window_handle
+            # Save current URL to return to later
+            original_url = self.driver.current_url
             popup_url = f"chrome-extension://{self.extension_id}/popup.html"
 
-            # FIRST POPUP OPENING
-            print(f"[INFO] Opening extension popup (1st time)...")
-            self.driver.execute_script(f"window.open('{popup_url}', '_blank');")
+            # Open extension popup
+            print(f"[INFO] Opening extension popup...")
+            self.driver.get(popup_url)
             time.sleep(2)
+            print(f"[SUCCESS] Navigated to extension popup: {popup_url}")
 
-            # Switch to popup tab
-            windows = self.driver.window_handles
-            if len(windows) > 1:
-                self.driver.switch_to.window(windows[-1])
-                print(f"[SUCCESS] Opened extension popup (1st time): {popup_url}")
-                print(f"[INFO] Staying on extension popup for 10 seconds...")
-                time.sleep(10)
+            # Print the DOM of the extension popup
+            try:
+                popup_html = self.driver.page_source
+                print("[INFO] Extension Popup DOM:")
+                print("=" * 70)
+                print(popup_html)
+                print("=" * 70)
+            except Exception as e:
+                print(f"[WARNING] Could not retrieve popup DOM: {e}")
 
-                # Print the DOM of the extension popup (first opening)
-                try:
-                    popup_html = self.driver.page_source
-                    print("[INFO] Extension Popup DOM (1st opening):")
-                    print("=" * 70)
-                    print(popup_html)
-                    print("=" * 70)
-                except Exception as e:
-                    print(f"[WARNING] Could not retrieve popup DOM: {e}")
+            # Look for "Start Planting" button
+            print("[INFO] Looking for 'Start Planting' button...")
+            try:
+                # Find button with inner text "Start Planting"
+                script = """
+                const buttons = document.querySelectorAll('button');
+                for (let button of buttons) {
+                    if (button.innerText.trim() === 'Start Planting') {
+                        return button;
+                    }
+                }
+                return null;
+                """
 
-                # Close the popup tab
-                self.driver.close()
-                print("[INFO] Extension popup closed (1st time)")
+                start_button = self.driver.execute_script(script)
 
-                # Switch back to site tab
-                self.driver.switch_to.window(original_window)
-                print("[INFO] Switched back to site tab")
-                time.sleep(2)
-            else:
-                print("[WARNING] Could not open extension popup in new tab")
+                if start_button:
+                    print("[SUCCESS] Found 'Start Planting' button!")
+                    print("[INFO] Clicking 'Start Planting' button...")
 
-            # SECOND POPUP OPENING
-            print(f"[INFO] Opening extension popup (2nd time)...")
-            self.driver.execute_script(f"window.open('{popup_url}', '_blank');")
-            time.sleep(2)
+                    # Click the button
+                    self.driver.execute_script("arguments[0].click();", start_button)
+                    time.sleep(2)
+                    print("[SUCCESS] Clicked 'Start Planting' button")
 
-            # Switch to the newest popup tab
-            windows = self.driver.window_handles
-            if len(windows) > 1:
-                self.driver.switch_to.window(windows[-1])
-                print(f"[SUCCESS] Opened extension popup (2nd time): {popup_url}")
-                print(f"[INFO] Staying on extension popup for 30 seconds...")
-                time.sleep(30)
+                    # Navigate back to original site
+                    print(f"[INFO] Navigating back to site: {original_url}")
+                    self.driver.get(original_url)
+                    time.sleep(2)
+                    print("[INFO] Back on site")
 
-                # Print the DOM of the extension popup (second opening)
-                try:
-                    popup_html = self.driver.page_source
-                    print("[INFO] Extension Popup DOM (2nd opening):")
-                    print("=" * 70)
-                    print(popup_html)
-                    print("=" * 70)
-                except Exception as e:
-                    print(f"[WARNING] Could not retrieve popup DOM: {e}")
+                    return True
+                else:
+                    print("[ERROR] 'Start Planting' button not found in popup!")
+                    print("[ERROR] Extension activation failed. Exiting script.")
+                    sys.exit(1)
 
-                # Close the popup tab
-                self.driver.close()
-                print("[INFO] Extension popup closed (2nd time)")
-
-                # Switch back to site tab
-                self.driver.switch_to.window(original_window)
-                print("[INFO] Switched back to site tab")
-            else:
-                print("[WARNING] Could not open extension popup in new tab")
-
-            # Verify we're on the correct window
-            current_url = self.driver.current_url
-            print(f"[INFO] Current tab URL: {current_url}")
+            except Exception as e:
+                print(f"[ERROR] Error finding/clicking 'Start Planting' button: {e}")
+                import traceback
+                traceback.print_exc()
+                print("[ERROR] Extension activation failed. Exiting script.")
+                sys.exit(1)
 
         except Exception as e:
-            print(f"[WARNING] Error activating extension: {e}")
-            # Make sure we're back on the original window
-            try:
-                if len(self.driver.window_handles) > 0:
-                    self.driver.switch_to.window(self.driver.window_handles[0])
-            except:
-                pass
+            print(f"[ERROR] Error activating extension: {e}")
+            import traceback
+            traceback.print_exc()
+            print("[ERROR] Extension activation failed. Exiting script.")
+            sys.exit(1)
 
     def extract_request_data(self, request) -> Dict[str, Any]:
         """Extract relevant data from a request object."""
