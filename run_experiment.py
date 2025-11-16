@@ -239,14 +239,20 @@ class NetworkAnalyzer:
             if len(windows) > 1:
                 self.driver.switch_to.window(windows[-1])
                 print(f"[SUCCESS] Opened extension popup: {popup_url}")
-                time.sleep(2)
+                print(f"[INFO] Staying on extension popup for 30 seconds...")
+                time.sleep(30)
 
                 # Close the popup tab
                 self.driver.close()
+                print("[INFO] Extension popup closed")
 
-                # Switch back to original window
+                # Switch back to original window (the site tab)
                 self.driver.switch_to.window(original_window)
-                print("[INFO] Extension activated and popup closed")
+                print("[INFO] Switched back to site tab")
+
+                # Verify we're on the correct window
+                current_url = self.driver.current_url
+                print(f"[INFO] Current tab URL: {current_url}")
             else:
                 print("[WARNING] Could not open extension popup in new tab")
 
