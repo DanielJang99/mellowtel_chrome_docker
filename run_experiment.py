@@ -176,8 +176,6 @@ class NetworkAnalyzer:
             # Get all extension IDs and find IdleForest
             script = """
             const manager = document.querySelector('extensions-manager');
-            const cr_manager = manager.shadowRoot.querySelector('extensions-manager');
-
             const itemList = manager.shadowRoot.querySelector('extensions-item-list');
             const items = itemList.shadowRoot.querySelectorAll('extensions-item');
 
@@ -197,12 +195,20 @@ class NetworkAnalyzer:
                 if 'idle' in ext['name'].lower() and 'forest' in ext['name'].lower():
                     self.extension_id = ext['id']
                     print(f"[SUCCESS] Found IdleForest extension ID: {self.extension_id}")
+
+                    # Enable the extension if it's not already enabled
+                    self.enable_extension(ext['id'])
+
                     return self.extension_id
 
             # If not found by name, just use the first extension (assuming it's the only one)
             if extensions and len(extensions) > 0:
                 self.extension_id = extensions[0]['id']
                 print(f"[WARNING] Could not find 'IdleForest' by name. Using first extension: {self.extension_id}")
+
+                # Enable the extension
+                self.enable_extension(extensions[0]['id'])
+
                 return self.extension_id
 
             print("[WARNING] No extensions found")
@@ -211,6 +217,53 @@ class NetworkAnalyzer:
         except Exception as e:
             print(f"[WARNING] Error getting extension ID: {e}")
             return None
+
+    def enable_extension(self, extension_id: str):
+        """
+        Enable the extension via the toggle on chrome://extensions page.
+        """
+        try:
+            print(f"[INFO] Ensuring extension is enabled...")
+
+            # Navigate to chrome://extensions if not already there
+            if not self.driver.current_url.startswith('chrome://extensions'):
+                self.driver.get("chrome://extensions/")
+                time.sleep(2)
+
+            # Check and enable the extension toggle
+            script = f"""
+            const manager = document.querySelector('extensions-manager');
+            const itemList = manager.shadowRoot.querySelector('extensions-item-list');
+            const items = itemList.shadowRoot.querySelectorAll('extensions-item');
+
+            let found = false;
+            items.forEach(item => {{
+                if (item.id === '{extension_id}') {{
+                    const toggle = item.shadowRoot.querySelector('#enableToggle');
+                    if (toggle && !toggle.checked) {{
+                        toggle.click();
+                        found = true;
+                        return 'enabled';
+                    }} else if (toggle && toggle.checked) {{
+                        found = true;
+                        return 'already_enabled';
+                    }}
+                }}
+            }});
+
+            return found ? 'success' : 'not_found';
+            """
+
+            result = self.driver.execute_script(script)
+
+            if result == 'success':
+                print(f"[SUCCESS] Extension is now enabled")
+                time.sleep(1)
+            else:
+                print(f"[INFO] Extension toggle state: {result}")
+
+        except Exception as e:
+            print(f"[WARNING] Error enabling extension: {e}")
 
     def click_extension_in_toolbar(self):
         """
@@ -473,9 +526,40 @@ class NetworkAnalyzer:
         except Exception as e:
             print(f"[ERROR] Failed to save network logs: {e}")
 
+    def close_all_tabs_except_one(self):
+        """Close all tabs except one to start fresh."""
+        try:
+            windows = self.driver.window_handles
+
+            if len(windows) > 1:
+                print(f"[INFO] Closing {len(windows) - 1} extra tab(s)...")
+
+                # Keep the first tab, close all others
+                for i in range(len(windows) - 1, 0, -1):
+                    self.driver.switch_to.window(windows[i])
+                    self.driver.close()
+
+                # Switch back to the first (remaining) tab
+                self.driver.switch_to.window(windows[0])
+                print(f"[SUCCESS] All extra tabs closed, now have 1 tab")
+            else:
+                print(f"[INFO] Only 1 tab open, no need to close tabs")
+
+        except Exception as e:
+            print(f"[WARNING] Error closing tabs: {e}")
+            # Try to switch to first window if possible
+            try:
+                if len(self.driver.window_handles) > 0:
+                    self.driver.switch_to.window(self.driver.window_handles[0])
+            except:
+                pass
+
     def visit_site(self, url: str, index: int, total: int):
         """Visit a single site and capture network activity."""
         print(f"\n[{index}/{total}] Visiting: {url}")
+
+        # Close all tabs except one to start fresh
+        self.close_all_tabs_except_one()
 
         # Clear previous requests and iframe tracking
         del self.driver.requests
