@@ -3,16 +3,9 @@
 # Lines starting with # are ignored
 
 # Top websites for testing
-https://www.google.com
 https://www.youtube.com
-https://www.wikipedia.org
 https://www.reddit.com
 https://www.amazon.com
-https://www.twitter.com
-https://www.instagram.com
-https://www.linkedin.com
-https://www.netflix.com
-https://www.github.com
 
 # News sites
 https://www.bbc.com

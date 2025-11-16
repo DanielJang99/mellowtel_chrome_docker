@@ -33,6 +33,7 @@ class NetworkAnalyzer:
         self.output_file = 'output/network_logs.jsonl'
         self.driver = None
         self.mellowtel_iframe_urls = set()  # Track iframe URLs for filtering
+        self.extension_id = None  # Store extension ID for activation
 
     def setup_chrome_options(self) -> Options:
         """Configure Chrome options for the experiment."""
@@ -147,6 +148,116 @@ class NetworkAnalyzer:
             print("  4. Try running with HEADLESS=true")
             print("  5. Check Docker shared memory (shm_size in docker-compose.yml)")
             sys.exit(1)
+
+    def get_extension_id(self) -> str:
+        """
+        Get the extension ID for IdleForest extension.
+        Returns the extension ID or None if not found.
+        """
+        try:
+            print("[INFO] Getting extension ID...")
+
+            # Navigate to chrome://extensions
+            self.driver.get("chrome://extensions/")
+            time.sleep(2)
+
+            # Enable developer mode to see extension IDs
+            script = """
+            const devModeToggle = document.querySelector('extensions-manager')
+                .shadowRoot.querySelector('extensions-toolbar')
+                .shadowRoot.querySelector('#devMode');
+            if (devModeToggle && !devModeToggle.checked) {
+                devModeToggle.click();
+            }
+            """
+            self.driver.execute_script(script)
+            time.sleep(1)
+
+            # Get all extension IDs and find IdleForest
+            script = """
+            const manager = document.querySelector('extensions-manager');
+            const itemList = manager.shadowRoot.querySelector('extensions-item-list');
+            const items = itemList.shadowRoot.querySelectorAll('extensions-item');
+
+            const extensions = [];
+            items.forEach(item => {
+                const name = item.shadowRoot.querySelector('#name').textContent.trim();
+                const id = item.id;
+                extensions.push({name: name, id: id});
+            });
+
+            return extensions;
+            """
+
+            extensions = self.driver.execute_script(script)
+
+            for ext in extensions:
+                print(f"[INFO] Found extension: {ext['name']} (ID: {ext['id']})")
+                # Look for IdleForest or Idle Forest
+                if 'idle' in ext['name'].lower() and 'forest' in ext['name'].lower():
+                    self.extension_id = ext['id']
+                    print(f"[SUCCESS] Found IdleForest extension ID: {self.extension_id}")
+                    return self.extension_id
+
+            # If not found by name, just use the first extension (assuming it's the only one)
+            if extensions and len(extensions) > 0:
+                self.extension_id = extensions[0]['id']
+                print(f"[WARNING] Could not find 'IdleForest' by name. Using first extension: {self.extension_id}")
+                return self.extension_id
+
+            print("[WARNING] No extensions found")
+            return None
+
+        except Exception as e:
+            print(f"[WARNING] Error getting extension ID: {e}")
+            return None
+
+    def activate_extension(self):
+        """
+        Activate the IdleForest extension by clicking its icon.
+        This is done by opening the extension's popup page.
+        """
+        if not self.extension_id:
+            print("[WARNING] Extension ID not available. Skipping activation.")
+            return
+
+        try:
+            print(f"[INFO] Activating IdleForest extension...")
+
+            # Open extension popup in a new tab
+            popup_url = f"chrome-extension://{self.extension_id}/popup.html"
+
+            # Save current window handle
+            original_window = self.driver.current_window_handle
+
+            # Open popup in new tab
+            self.driver.execute_script(f"window.open('{popup_url}', '_blank');")
+            time.sleep(2)
+
+            # Switch to new tab
+            windows = self.driver.window_handles
+            if len(windows) > 1:
+                self.driver.switch_to.window(windows[-1])
+                print(f"[SUCCESS] Opened extension popup: {popup_url}")
+                time.sleep(2)
+
+                # Close the popup tab
+                self.driver.close()
+
+                # Switch back to original window
+                self.driver.switch_to.window(original_window)
+                print("[INFO] Extension activated and popup closed")
+            else:
+                print("[WARNING] Could not open extension popup in new tab")
+
+        except Exception as e:
+            print(f"[WARNING] Error activating extension: {e}")
+            # Make sure we're back on the original window
+            try:
+                if len(self.driver.window_handles) > 0:
+                    self.driver.switch_to.window(self.driver.window_handles[0])
+            except:
+                pass
 
     def extract_request_data(self, request) -> Dict[str, Any]:
         """Extract relevant data from a request object."""
@@ -274,7 +385,12 @@ class NetworkAnalyzer:
         try:
             # Navigate to the URL
             self.driver.get(url)
-            print(f"[INFO] Page loaded. Monitoring for Mellowtel iframe injection...")
+            print(f"[INFO] Page loaded.")
+
+            # Activate the IdleForest extension by clicking its icon
+            self.activate_extension()
+
+            print(f"[INFO] Monitoring for Mellowtel iframe injection...")
 
             # Poll for Mellowtel iframe detection
             iframe_detected = False
@@ -339,6 +455,9 @@ class NetworkAnalyzer:
 
         # Initialize driver
         self.initialize_driver()
+
+        # Get extension ID for activation
+        self.get_extension_id()
 
         try:
             # Visit each site
