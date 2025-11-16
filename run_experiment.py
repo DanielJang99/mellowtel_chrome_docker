@@ -304,19 +304,50 @@ class NetworkAnalyzer:
 
             # Look for "Start Planting" button
             print("[INFO] Looking for 'Start Planting' button...")
+
+            # Wait a bit for any dynamic content to load
+            time.sleep(2)
+
             try:
-                # Find button with inner text "Start Planting"
-                script = """
+                # First, list all buttons to help debug
+                list_buttons_script = """
+                const buttons = document.querySelectorAll('button');
+                const buttonInfo = [];
+                buttons.forEach((button, index) => {
+                    buttonInfo.push({
+                        index: index,
+                        innerText: button.innerText,
+                        textContent: button.textContent,
+                        innerHTML: button.innerHTML
+                    });
+                });
+                return buttonInfo;
+                """
+
+                all_buttons = self.driver.execute_script(list_buttons_script)
+                print(f"[INFO] Found {len(all_buttons)} button(s) in popup:")
+                for btn_info in all_buttons:
+                    print(f"  Button {btn_info['index']}:")
+                    print(f"    innerText: '{btn_info['innerText']}'")
+                    print(f"    textContent: '{btn_info['textContent']}'")
+                    print(f"    innerHTML: '{btn_info['innerHTML']}'")
+
+                # Find button with text containing "Start Planting" (case-insensitive)
+                find_button_script = """
                 const buttons = document.querySelectorAll('button');
                 for (let button of buttons) {
-                    if (button.innerText.trim() === 'Start Planting') {
+                    const innerText = (button.innerText || '').trim();
+                    const textContent = (button.textContent || '').trim();
+
+                    if (innerText.toLowerCase().includes('start planting') ||
+                        textContent.toLowerCase().includes('start planting')) {
                         return button;
                     }
                 }
                 return null;
                 """
 
-                start_button = self.driver.execute_script(script)
+                start_button = self.driver.execute_script(find_button_script)
 
                 if start_button:
                     print("[SUCCESS] Found 'Start Planting' button!")
