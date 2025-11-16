@@ -156,7 +156,7 @@ For more thorough extension analysis:
 ```yaml
 # In docker-compose.yml
 environment:
-  - DWELL_TIME=120  # 2 minutes per page
+  - DWELL_TIME=300  # 2 minutes per page
 ```
 
 ### Run in Headless Mode
