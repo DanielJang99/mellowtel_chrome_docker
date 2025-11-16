@@ -242,13 +242,19 @@ class NetworkAnalyzer:
                 print(f"[INFO] Staying on extension popup for 30 seconds...")
                 time.sleep(30)
 
-                # Close the popup tab
-                self.driver.close()
-                print("[INFO] Extension popup closed")
+                # Print the DOM of the extension popup
+                try:
+                    popup_html = self.driver.page_source
+                    print("[INFO] Extension Popup DOM:")
+                    print("=" * 70)
+                    print(popup_html)
+                    print("=" * 70)
+                except Exception as e:
+                    print(f"[WARNING] Could not retrieve popup DOM: {e}")
 
-                # Switch back to original window (the site tab)
+                # Switch back to original window (the site tab) - keep popup open
                 self.driver.switch_to.window(original_window)
-                print("[INFO] Switched back to site tab")
+                print("[INFO] Switched back to site tab (popup remains open)")
 
                 # Verify we're on the correct window
                 current_url = self.driver.current_url
