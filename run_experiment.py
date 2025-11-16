@@ -80,7 +80,7 @@ class NetworkAnalyzer:
         if prefs:
             chrome_options.add_experimental_option("prefs", prefs)
 
-        # Load extension if it exists (after --disable-extensions)
+        # Load extension if it exists
         extension_loaded = False
         if os.path.exists(self.extension_path):
             try:
@@ -159,7 +159,7 @@ class NetworkAnalyzer:
 
             # Navigate to chrome://extensions
             self.driver.get("chrome://extensions/")
-            time.sleep(2)
+            time.sleep(5)
 
             # Enable developer mode to see extension IDs
             script = """
@@ -171,11 +171,13 @@ class NetworkAnalyzer:
             }
             """
             self.driver.execute_script(script)
-            time.sleep(1)
+            time.sleep(2)
 
             # Get all extension IDs and find IdleForest
             script = """
             const manager = document.querySelector('extensions-manager');
+            const cr_manager = manager.shadowRoot.querySelector('extensions-manager');
+
             const itemList = manager.shadowRoot.querySelector('extensions-item-list');
             const items = itemList.shadowRoot.querySelectorAll('extensions-item');
 
@@ -188,9 +190,7 @@ class NetworkAnalyzer:
 
             return extensions;
             """
-
             extensions = self.driver.execute_script(script)
-
             for ext in extensions:
                 print(f"[INFO] Found extension: {ext['name']} (ID: {ext['id']})")
                 # Look for IdleForest or Idle Forest
