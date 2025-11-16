@@ -45,18 +45,20 @@ RUN apt-get update && apt-get install -y \
     --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Google Chrome version 136 specifically
-RUN CHROME_VERSION="136.0.6778.264" \
-    && wget -q -O /tmp/google-chrome-stable.deb "https://dl.google.com/linux/chrome/deb/pool/main/g/google-chrome-stable/google-chrome-stable_${CHROME_VERSION}-1_amd64.deb" \
-    && apt-get update \
-    && apt-get install -y /tmp/google-chrome-stable.deb \
-    && rm /tmp/google-chrome-stable.deb \
-    && rm -rf /var/lib/apt/lists/*
+# Install Google Chrome version 136 from Chrome for Testing
+RUN CHROME_VERSION=$(curl -s "https://googlechromelabs.github.io/chrome-for-testing/LATEST_RELEASE_136") \
+    && echo "Installing Chrome version: ${CHROME_VERSION}" \
+    && wget -q "https://storage.googleapis.com/chrome-for-testing-public/${CHROME_VERSION}/linux64/chrome-linux64.zip" -O /tmp/chrome-linux64.zip \
+    && unzip -q /tmp/chrome-linux64.zip -d /opt/ \
+    && ln -s /opt/chrome-linux64/chrome /usr/local/bin/google-chrome \
+    && ln -s /opt/chrome-linux64/chrome /usr/local/bin/chrome \
+    && rm /tmp/chrome-linux64.zip
 
 # Install matching ChromeDriver for Chrome 136
 RUN CHROMEDRIVER_VERSION=$(curl -s "https://googlechromelabs.github.io/chrome-for-testing/LATEST_RELEASE_136") \
+    && echo "Installing ChromeDriver version: ${CHROMEDRIVER_VERSION}" \
     && wget -q "https://storage.googleapis.com/chrome-for-testing-public/${CHROMEDRIVER_VERSION}/linux64/chromedriver-linux64.zip" \
-    && unzip chromedriver-linux64.zip \
+    && unzip -q chromedriver-linux64.zip \
     && mv chromedriver-linux64/chromedriver /usr/local/bin/ \
     && chmod +x /usr/local/bin/chromedriver \
     && rm -rf chromedriver-linux64.zip chromedriver-linux64
