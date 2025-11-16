@@ -30,10 +30,15 @@ class NetworkAnalyzer:
         self.disable_images = os.getenv('DISABLE_IMAGES', 'false').lower() == 'true'
         self.sites_file = 'sites.txt'
         self.extension_path = 'IdleForest.crx'
-        self.output_file = 'output/network_logs.jsonl'
+
+        # Generate timestamped output filename
+        timestamp = datetime.utcnow().strftime('%Y%m%d_%H%M%S')
+        self.output_file = f'output/network_logs_{timestamp}.jsonl'
+
         self.driver = None
         self.mellowtel_iframe_urls = set()  # Track iframe URLs for filtering
         self.extension_id = None  # Store extension ID for activation
+        self.extension_activated = False  # Track if extension has been activated
 
     def setup_chrome_options(self) -> Options:
         """Configure Chrome options for the experiment."""
@@ -543,8 +548,11 @@ class NetworkAnalyzer:
             self.driver.get(url)
             print(f"[INFO] Page loaded.")
 
-            # Activate the IdleForest extension by clicking its icon
-            self.activate_extension()
+            # Activate the IdleForest extension only once (before the first site)
+            if not self.extension_activated:
+                self.activate_extension()
+                self.extension_activated = True
+                print(f"[INFO] Extension activated. This will not be repeated for subsequent sites.")
 
             print(f"[INFO] Monitoring for Mellowtel iframe injection...")
 
