@@ -234,6 +234,11 @@ class NetworkAnalyzer:
             self.driver.execute_script(f"window.open('{popup_url}', '_blank');")
             time.sleep(2)
 
+            self.driver.close()
+            time.sleep(2)
+            self.driver.execute_script(f"window.open('{popup_url}', '_blank');")
+            time.sleep(2)
+
             # Switch to new tab
             windows = self.driver.window_handles
             if len(windows) > 1:
