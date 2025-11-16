@@ -11,11 +11,14 @@ services:
       # - ./IdleForest.crx:/app/IdleForest.crx
       # Optional: Mount sites.txt to update without rebuilding
       - ./sites.txt:/app/sites.txt
+      # Mount X11 socket for GUI display
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
     environment:
       # Configurable environment variables
       - DWELL_TIME=60  # Seconds to wait on each page
-      - HEADLESS=true  # Run Chrome in headless mode
+      - HEADLESS=false  # Run Chrome in headless mode (set to false for debugging)
       - DISABLE_IMAGES=false  # Set to true to disable image loading for faster execution
+      - DISPLAY=${DISPLAY}  # Use host's DISPLAY
     shm_size: 2gb  # Increase shared memory size for Chrome
     security_opt:
       - seccomp:unconfined  # Required for Chrome sandbox in some environments

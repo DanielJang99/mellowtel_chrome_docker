@@ -56,6 +56,12 @@ class NetworkAnalyzer:
         # Window size
         chrome_options.add_argument('--window-size=1920,1080')
 
+        # Set unique user data directory to avoid conflicts
+        import tempfile
+        user_data_dir = tempfile.mkdtemp(prefix='chrome_profile_')
+        chrome_options.add_argument(f'--user-data-dir={user_data_dir}')
+        print(f"[INFO] Using user data directory: {user_data_dir}")
+
         # Disable automation detection
         chrome_options.add_argument('--disable-blink-features=AutomationControlled')
         chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
