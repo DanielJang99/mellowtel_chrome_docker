@@ -265,7 +265,7 @@ class NetworkAnalyzer:
 
     def activate_extension(self):
         """
-        Activate the IdleForest extension by clicking its icon in the toolbar twice.
+        Activate the IdleForest extension by opening its popup URL twice.
         """
         if not self.extension_id:
             print("[WARNING] Extension ID not available. Skipping activation.")
@@ -276,40 +276,52 @@ class NetworkAnalyzer:
 
             # Save current window handle
             original_window = self.driver.current_window_handle
+            popup_url = f"chrome-extension://{self.extension_id}/popup.html"
 
-            # FIRST TOOLBAR CLICK
-            print(f"[INFO] Clicking extension in toolbar (1st time)...")
-            self.click_extension_in_toolbar()
+            # FIRST POPUP OPENING
+            print(f"[INFO] Opening extension popup (1st time)...")
+            self.driver.execute_script(f"window.open('{popup_url}', '_blank');")
             time.sleep(2)
 
-            # Try to switch to popup window
+            # Switch to popup tab
             windows = self.driver.window_handles
             if len(windows) > 1:
-                # Switch to the new window (popup)
                 self.driver.switch_to.window(windows[-1])
-                print(f"[SUCCESS] Switched to extension popup (1st time)")
+                print(f"[SUCCESS] Opened extension popup (1st time): {popup_url}")
                 print(f"[INFO] Staying on extension popup for 10 seconds...")
                 time.sleep(10)
+
+                # Print the DOM of the extension popup (first opening)
+                try:
+                    popup_html = self.driver.page_source
+                    print("[INFO] Extension Popup DOM (1st opening):")
+                    print("=" * 70)
+                    print(popup_html)
+                    print("=" * 70)
+                except Exception as e:
+                    print(f"[WARNING] Could not retrieve popup DOM: {e}")
+
+                # Close the popup tab
+                self.driver.close()
+                print("[INFO] Extension popup closed (1st time)")
 
                 # Switch back to site tab
                 self.driver.switch_to.window(original_window)
                 print("[INFO] Switched back to site tab")
                 time.sleep(2)
             else:
-                print("[INFO] Popup opened (may be inline), waiting 10 seconds...")
-                time.sleep(10)
+                print("[WARNING] Could not open extension popup in new tab")
 
-            # SECOND TOOLBAR CLICK
-            print(f"[INFO] Clicking extension in toolbar (2nd time)...")
-            self.click_extension_in_toolbar()
+            # SECOND POPUP OPENING
+            print(f"[INFO] Opening extension popup (2nd time)...")
+            self.driver.execute_script(f"window.open('{popup_url}', '_blank');")
             time.sleep(2)
 
-            # Try to switch to the newest popup window
+            # Switch to the newest popup tab
             windows = self.driver.window_handles
-            if len(windows) > len([original_window]):
-                # Switch to the newest window
+            if len(windows) > 1:
                 self.driver.switch_to.window(windows[-1])
-                print(f"[SUCCESS] Switched to extension popup (2nd time)")
+                print(f"[SUCCESS] Opened extension popup (2nd time): {popup_url}")
                 print(f"[INFO] Staying on extension popup for 30 seconds...")
                 time.sleep(30)
 
@@ -323,20 +335,19 @@ class NetworkAnalyzer:
                 except Exception as e:
                     print(f"[WARNING] Could not retrieve popup DOM: {e}")
 
-                # Switch back to site tab - keep popups open
+                # Close the popup tab
+                self.driver.close()
+                print("[INFO] Extension popup closed (2nd time)")
+
+                # Switch back to site tab
                 self.driver.switch_to.window(original_window)
-                print("[INFO] Switched back to site tab (popups remain open)")
+                print("[INFO] Switched back to site tab")
             else:
-                print("[INFO] Popup opened (may be inline), waiting 30 seconds...")
-                time.sleep(30)
+                print("[WARNING] Could not open extension popup in new tab")
 
             # Verify we're on the correct window
-            try:
-                self.driver.switch_to.window(original_window)
-                current_url = self.driver.current_url
-                print(f"[INFO] Current tab URL: {current_url}")
-            except:
-                print("[WARNING] Could not verify current tab")
+            current_url = self.driver.current_url
+            print(f"[INFO] Current tab URL: {current_url}")
 
         except Exception as e:
             print(f"[WARNING] Error activating extension: {e}")
