@@ -11,6 +11,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 from typing import List, Dict, Any
+from urllib.parse import urlparse
 
 from seleniumwire import webdriver
 from selenium.webdriver.chrome.options import Options
@@ -37,6 +38,7 @@ class NetworkAnalyzer:
 
         self.driver = None
         self.mellowtel_iframe_urls = set()  # Track iframe URLs for filtering
+        self.mellowtel_domains = set()  # Track iframe domains for filtering
         self.extension_id = None  # Store extension ID for activation
         self.extension_activated = False  # Track if extension has been activated
 
@@ -407,7 +409,7 @@ class NetworkAnalyzer:
                 }
 
             return {
-                'timestamp': datetime.utcnow().isoformat() + 'Z',
+                'timestamp': int(datetime.utcnow().timestamp()),
                 'url': request.url,
                 'method': request.method,
                 'request_headers': request_headers,
@@ -460,21 +462,36 @@ class NetworkAnalyzer:
             print(f"[WARNING] Error checking for Mellowtel iframes: {e}")
             return []
 
+    def extract_domain(self, url: str) -> str:
+        """
+        Extract domain (netloc) from a URL.
+        Returns empty string if URL is invalid.
+        """
+        try:
+            parsed = urlparse(url)
+            return parsed.netloc.lower()
+        except Exception:
+            return ""
+
     def is_mellowtel_request(self, request_url: str) -> bool:
         """
         Check if a request is Mellowtel-related.
         Returns True if:
         - URL contains 'request.mellow.tel'
-        - URL matches a tracked Mellowtel iframe URL
+        - Request domain matches any tracked Mellowtel iframe domain
         """
         # Check for request.mellow.tel
         if 'request.mellow.tel' in request_url:
             return True
 
-        # Check if URL matches any tracked iframe URLs
-        for iframe_url in self.mellowtel_iframe_urls:
-            if iframe_url and iframe_url in request_url:
-                return True
+        # Extract domain from request URL
+        request_domain = self.extract_domain(request_url)
+        if not request_domain:
+            return False
+
+        # Check if request domain matches any tracked iframe domains
+        if request_domain in self.mellowtel_domains:
+            return True
 
         return False
 
@@ -503,6 +520,15 @@ class NetworkAnalyzer:
             print(f"[INFO] Captured {mellowtel_requests} Mellowtel requests out of {total_requests} total requests")
         except Exception as e:
             print(f"[ERROR] Failed to save network logs: {e}")
+
+    def scroll_page(self):
+        """Scroll down the page a bit."""
+        try:
+            # Scroll down by 500 pixels
+            self.driver.execute_script("window.scrollBy(0, 500);")
+            print("[INFO] Scrolled down 500 pixels")
+        except Exception as e:
+            print(f"[WARNING] Error scrolling page: {e}")
 
     def close_all_tabs_except_one(self):
         """Close all tabs except one to start fresh."""
@@ -542,6 +568,7 @@ class NetworkAnalyzer:
         # Clear previous requests and iframe tracking
         del self.driver.requests
         self.mellowtel_iframe_urls.clear()
+        self.mellowtel_domains.clear()
 
         try:
             # Navigate to the URL
@@ -559,6 +586,7 @@ class NetworkAnalyzer:
             # Poll for Mellowtel iframe detection
             iframe_detected = False
             elapsed = 0
+            last_scroll_time = 0  # Track when we last scrolled
 
             while elapsed < self.max_wait_for_iframe:
                 iframe_urls = self.check_for_mellowtel_iframes()
@@ -567,12 +595,35 @@ class NetworkAnalyzer:
                     # Iframe detected!
                     iframe_detected = True
                     self.mellowtel_iframe_urls.update(iframe_urls)
-                    print(f"[SUCCESS] Mellowtel iframe(s) detected! Tracking {len(iframe_urls)} iframe URL(s)")
+
+                    # Extract and track domains from iframe URLs
+                    for iframe_url in iframe_urls:
+                        domain = self.extract_domain(iframe_url)
+                        if domain:
+                            self.mellowtel_domains.add(domain)
+                            print(f"[INFO] Tracking domain: {domain}")
+
+                    print(f"[SUCCESS] Mellowtel iframe(s) detected! Tracking {len(iframe_urls)} iframe URL(s) and {len(self.mellowtel_domains)} domain(s)")
                     print(f"[INFO] Waiting {self.iframe_wait_time} seconds to capture Mellowtel activity...")
 
-                    # Wait 5 minutes after detection
-                    time.sleep(self.iframe_wait_time)
+                    # Wait 5 minutes after detection with scrolling every minute
+                    wait_elapsed = 0
+                    while wait_elapsed < self.iframe_wait_time:
+                        # Scroll every 60 seconds
+                        if wait_elapsed > 0 and wait_elapsed % 60 == 0:
+                            self.scroll_page()
+
+                        # Wait in small increments
+                        sleep_time = min(self.iframe_poll_interval, self.iframe_wait_time - wait_elapsed)
+                        time.sleep(sleep_time)
+                        wait_elapsed += sleep_time
+
                     break
+
+                # Scroll every 60 seconds during iframe detection
+                if elapsed - last_scroll_time >= 60:
+                    self.scroll_page()
+                    last_scroll_time = elapsed
 
                 # Wait before next poll
                 time.sleep(self.iframe_poll_interval)
@@ -581,7 +632,18 @@ class NetworkAnalyzer:
             if not iframe_detected:
                 print(f"[WARNING] No Mellowtel iframe detected after {self.max_wait_for_iframe} seconds")
                 print(f"[INFO] Waiting {self.dwell_time} seconds for any potential Mellowtel activity...")
-                time.sleep(self.dwell_time)
+
+                # Wait with scrolling every minute
+                wait_elapsed = 0
+                while wait_elapsed < self.dwell_time:
+                    # Scroll every 60 seconds
+                    if wait_elapsed > 0 and wait_elapsed % 60 == 0:
+                        self.scroll_page()
+
+                    # Wait in small increments
+                    sleep_time = min(self.iframe_poll_interval, self.dwell_time - wait_elapsed)
+                    time.sleep(sleep_time)
+                    wait_elapsed += sleep_time
 
             # Save captured network requests (filtered for Mellowtel)
             self.save_network_logs(url)
@@ -607,7 +669,8 @@ class NetworkAnalyzer:
         print(f"  - Output file: {self.output_file}")
         print(f"\nFiltering:")
         print(f"  - Only capturing requests to 'request.mellow.tel'")
-        print(f"  - Only capturing requests to iframes with 'mllwtl' in id/data-id")
+        print(f"  - Only capturing requests with same domain as Mellowtel iframes")
+        print(f"  - Detecting iframes with 'mllwtl' in id/data-id attributes")
         print("=" * 70)
 
         # Load sites

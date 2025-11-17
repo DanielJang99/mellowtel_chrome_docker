@@ -2,19 +2,15 @@
 # Add one URL per line (must include http:// or https://)
 # Lines starting with # are ignored
 
-# Top websites for testing
-https://www.youtube.com
-https://www.reddit.com
-https://www.amazon.com
-
 # News sites
 https://www.bbc.com
 https://www.cnn.com
 https://www.nytimes.com
+https://www.washingtonpost.com
+https://www.reuters.com
+https://apnews.com
+https://www.nbcnews.com
 
 # Tech sites
-https://www.stackoverflow.com
 https://www.techcrunch.com
 https://www.theverge.com
-
-# Add your own URLs below:
