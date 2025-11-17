@@ -16,7 +16,7 @@ services:
     environment:
       # Configurable environment variables
       - DWELL_TIME=60  # Seconds to wait on each page
-      - HEADLESS=false  # Run Chrome in headless mode (set to false for debugging)
+      - HEADLESS=true  # Run Chrome in headless mode (set to false for debugging)
       - DISABLE_IMAGES=false  # Set to true to disable image loading for faster execution
       - DISPLAY=${DISPLAY}  # Use host's DISPLAY
     shm_size: 2gb  # Increase shared memory size for Chrome

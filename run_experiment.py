@@ -25,22 +25,25 @@ class NetworkAnalyzer:
     def __init__(self):
         self.dwell_time = int(os.getenv('DWELL_TIME', '30'))
         self.iframe_wait_time = 300  # 5 minutes after iframe detection
-        self.iframe_poll_interval = 2  # Check for iframe every 2 seconds
+        self.iframe_poll_interval = 1  # Check for iframe every 2 seconds
         self.max_wait_for_iframe = 300  # Maximum 5 minutes to wait for iframe to appear
         self.headless = os.getenv('HEADLESS', 'true').lower() == 'true'
         self.disable_images = os.getenv('DISABLE_IMAGES', 'false').lower() == 'true'
         self.sites_file = 'sites.txt'
         self.extension_path = 'IdleForest.crx'
 
-        # Generate timestamped output filename
+        # Generate timestamped output filenames
         timestamp = datetime.utcnow().strftime('%Y%m%d_%H%M%S')
         self.output_file = f'output/network_logs_{timestamp}.jsonl'
+        self.iframe_metadata_file = f'output/iframe_metadata_{timestamp}.jsonl'
 
         self.driver = None
         self.mellowtel_iframe_urls = set()  # Track iframe URLs for filtering
         self.mellowtel_domains = set()  # Track iframe domains for filtering
+        self.iframe_metadata = {}  # Track iframe metadata: {src: {first_seen, last_seen, id, data_id, domain}}
         self.extension_id = None  # Store extension ID for activation
         self.extension_activated = False  # Track if extension has been activated
+        self.monitoring_start_time = None  # Track when monitoring started
 
     def setup_chrome_options(self) -> Options:
         """Configure Chrome options for the experiment."""
@@ -419,10 +422,10 @@ class NetworkAnalyzer:
             print(f"[WARNING] Error extracting request data: {e}")
             return None
 
-    def check_for_mellowtel_iframes(self) -> List[str]:
+    def check_for_mellowtel_iframes(self) -> List[Dict[str, str]]:
         """
         Check DOM for iframes with 'mllwtl' in their id or data-id attributes.
-        Returns list of iframe src URLs.
+        Returns list of iframe metadata dictionaries.
         """
         try:
             script = """
@@ -449,14 +452,11 @@ class NetworkAnalyzer:
             """
 
             result = self.driver.execute_script(script)
-            iframe_urls = []
 
             if result:
-                for iframe in result:
-                    iframe_urls.append(iframe['src'])
-                    print(f"[DETECTED] Mellowtel iframe: id='{iframe['id']}', data-id='{iframe['dataId']}', src='{iframe['src']}'")
-
-            return iframe_urls
+                return result
+            else:
+                return []
 
         except Exception as e:
             print(f"[WARNING] Error checking for Mellowtel iframes: {e}")
@@ -494,6 +494,57 @@ class NetworkAnalyzer:
             return True
 
         return False
+
+    def update_iframe_metadata(self, iframe_data: Dict[str, str], current_time: float):
+        """
+        Update iframe metadata with current timestamp.
+        Tracks first_seen and last_seen times.
+        """
+        src = iframe_data['src']
+
+        if src not in self.iframe_metadata:
+            # First time seeing this iframe
+            domain = self.extract_domain(src)
+            self.iframe_metadata[src] = {
+                'src': src,
+                'id': iframe_data['id'],
+                'data_id': iframe_data['dataId'],
+                'domain': domain,
+                'first_seen': current_time,
+                'last_seen': current_time
+            }
+        else:
+            # Update last_seen time
+            self.iframe_metadata[src]['last_seen'] = current_time
+
+    def save_iframe_metadata(self, site_url: str):
+        """Save iframe metadata to JSONL file."""
+        try:
+            # Ensure output directory exists
+            Path(self.iframe_metadata_file).parent.mkdir(parents=True, exist_ok=True)
+
+            with open(self.iframe_metadata_file, 'a') as f:
+                for src, metadata in self.iframe_metadata.items():
+                    # Calculate duration
+                    duration = metadata['last_seen'] - metadata['first_seen']
+
+                    iframe_record = {
+                        'visited_site': site_url,
+                        'src': metadata['src'],
+                        'id': metadata['id'],
+                        'data_id': metadata['data_id'],
+                        'domain': metadata['domain'],
+                        'first_seen': metadata['first_seen'],
+                        'last_seen': metadata['last_seen'],
+                        'duration_seconds': duration
+                    }
+
+                    # Write as JSON Lines format
+                    f.write(json.dumps(iframe_record) + '\n')
+
+            print(f"[INFO] Saved metadata for {len(self.iframe_metadata)} iframe(s)")
+        except Exception as e:
+            print(f"[ERROR] Failed to save iframe metadata: {e}")
 
     def save_network_logs(self, site_url: str):
         """Save captured Mellowtel-related network requests to JSONL file."""
@@ -569,11 +620,15 @@ class NetworkAnalyzer:
         del self.driver.requests
         self.mellowtel_iframe_urls.clear()
         self.mellowtel_domains.clear()
+        self.iframe_metadata.clear()
 
         try:
             # Navigate to the URL
             self.driver.get(url)
             print(f"[INFO] Page loaded.")
+
+            # Set monitoring start time
+            self.monitoring_start_time = time.time()
 
             # Activate the IdleForest extension only once (before the first site)
             if not self.extension_activated:
@@ -589,11 +644,17 @@ class NetworkAnalyzer:
             total_iframes_found = 0
 
             while elapsed < self.max_wait_for_iframe:
-                iframe_urls = self.check_for_mellowtel_iframes()
+                iframe_data_list = self.check_for_mellowtel_iframes()
 
-                if iframe_urls:
-                    # Convert list to set and check for new iframes
-                    iframe_urls_set = set(iframe_urls)
+                if iframe_data_list:
+                    current_time = time.time() - self.monitoring_start_time
+
+                    # Update metadata for all currently visible iframes
+                    for iframe_data in iframe_data_list:
+                        self.update_iframe_metadata(iframe_data, current_time)
+
+                    # Extract URLs for tracking
+                    iframe_urls_set = set(iframe['src'] for iframe in iframe_data_list)
                     new_iframes = iframe_urls_set - self.mellowtel_iframe_urls
 
                     if new_iframes:
@@ -640,11 +701,21 @@ class NetworkAnalyzer:
             # Save captured network requests (filtered for Mellowtel)
             self.save_network_logs(url)
 
+            # Save iframe metadata
+            self.save_iframe_metadata(url)
+
         except TimeoutException:
             print(f"[WARNING] Timeout loading {url} - continuing...")
             self.save_network_logs(url)
+            self.save_iframe_metadata(url)
         except Exception as e:
             print(f"[ERROR] Error visiting {url}: {e}")
+            # Try to save whatever data we have
+            try:
+                self.save_network_logs(url)
+                self.save_iframe_metadata(url)
+            except:
+                pass
 
     def run_experiment(self):
         """Main experiment execution."""
@@ -658,11 +729,13 @@ class NetworkAnalyzer:
         print(f"  - Fallback dwell time: {self.dwell_time} seconds (if no iframe detected)")
         print(f"  - Headless mode: {self.headless}")
         print(f"  - Disable images: {self.disable_images}")
-        print(f"  - Output file: {self.output_file}")
+        print(f"  - Network logs file: {self.output_file}")
+        print(f"  - Iframe metadata file: {self.iframe_metadata_file}")
         print(f"\nFiltering:")
         print(f"  - Only capturing requests to 'request.mellow.tel'")
         print(f"  - Only capturing requests with same domain as Mellowtel iframes")
         print(f"  - Detecting iframes with 'mllwtl' in id/data-id attributes")
+        print(f"  - Tracking iframe presence duration")
         print("=" * 70)
 
         # Load sites
@@ -686,6 +759,7 @@ class NetworkAnalyzer:
             print("\n" + "=" * 70)
             print("Experiment completed successfully!")
             print(f"Network logs saved to: {self.output_file}")
+            print(f"Iframe metadata saved to: {self.iframe_metadata_file}")
             print("=" * 70)
 
         except KeyboardInterrupt:
