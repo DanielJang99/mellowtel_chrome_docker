@@ -84,11 +84,28 @@ cd mellowtel_chrome_docker
 ## 4. Configure and Run
 
 ```bash
+
+BUILDX_VERSION=$(curl -s https://api.github.com/repos/docker/buildx/releases/latest | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
+curl -LO https://github.com/docker/buildx/releases/download/${BUILDX_VERSION}/buildx-${BUILDX_VERSION}.linux-amd64
+
+# Make it executable
+chmod +x buildx-${BUILDX_VERSION}.linux-amd64
+
+# Move to docker plugins directory
+mkdir -p ~/.docker/cli-plugins
+mv buildx-${BUILDX_VERSION}.linux-amd64 ~/.docker/cli-plugins/docker-buildx
+
+sudo mkdir -p /usr/local/lib/docker/cli-plugins
+sudo cp  ~/.docker/cli-plugins/docker-buildx /usr/local/lib/docker/cli-plugins/docker-buildx
+
+# Verify buildx version is > 17.0
+sudo docker buildx version
+
 # Edit sites if needed
 nano sites.txt
 
 # Test Chrome setup
-docker-compose run --rm mellowtel-analyzer python test_minimal.py
+sudo docker-compose run --rm mellowtel-analyzer python test_minimal.py
 
 # Should output:
 # ✓ Chrome started successfully!
@@ -97,7 +114,7 @@ docker-compose run --rm mellowtel-analyzer python test_minimal.py
 # ✓ All tests passed!
 
 # Run full experiment
-docker-compose up
+sudo docker-compose up
 
 # Or run in background
 docker-compose up -d
