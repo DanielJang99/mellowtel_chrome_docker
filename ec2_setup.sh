@@ -4,19 +4,7 @@ echo "========================================="
 echo "Starting EC2 Setup for Mellowtel Chrome Docker"
 echo "========================================="
 
-echo "[1/10] Updating system packages..."
-sudo yum update -y
-
-echo "[2/10] Installing Git..."
-sudo yum install git -y
-
-echo "[3/10] Installing Docker..."
-sudo yum install docker -y
-
-echo "[4/10] Cloning repository..."
-git clone https://github.com/DanielJang99/mellowtel_chrome_docker.git
-
-echo "[5/10] Starting Docker service..."
+echo "[1/6] Starting Docker service..."
 sudo systemctl enable docker.service
 sudo systemctl start docker.service
 
