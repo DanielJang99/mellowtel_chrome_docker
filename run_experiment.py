@@ -592,8 +592,9 @@ class NetworkAnalyzer:
                 iframe_urls = self.check_for_mellowtel_iframes()
 
                 if iframe_urls:
-                    # Check for new iframes
-                    new_iframes = iframe_urls - self.mellowtel_iframe_urls
+                    # Convert list to set and check for new iframes
+                    iframe_urls_set = set(iframe_urls)
+                    new_iframes = iframe_urls_set - self.mellowtel_iframe_urls
 
                     if new_iframes:
                         self.mellowtel_iframe_urls.update(new_iframes)
