@@ -581,46 +581,34 @@ class NetworkAnalyzer:
                 self.extension_activated = True
                 print(f"[INFO] Extension activated. This will not be repeated for subsequent sites.")
 
-            print(f"[INFO] Monitoring for Mellowtel iframe injection...")
+            print(f"[INFO] Monitoring for Mellowtel iframe injection for {self.max_wait_for_iframe} seconds...")
 
-            # Poll for Mellowtel iframe detection
-            iframe_detected = False
+            # Poll for Mellowtel iframe detection continuously
             elapsed = 0
             last_scroll_time = 0  # Track when we last scrolled
+            total_iframes_found = 0
 
             while elapsed < self.max_wait_for_iframe:
                 iframe_urls = self.check_for_mellowtel_iframes()
 
                 if iframe_urls:
-                    # Iframe detected!
-                    iframe_detected = True
-                    self.mellowtel_iframe_urls.update(iframe_urls)
+                    # Check for new iframes
+                    new_iframes = iframe_urls - self.mellowtel_iframe_urls
 
-                    # Extract and track domains from iframe URLs
-                    for iframe_url in iframe_urls:
-                        domain = self.extract_domain(iframe_url)
-                        if domain:
-                            self.mellowtel_domains.add(domain)
-                            print(f"[INFO] Tracking domain: {domain}")
+                    if new_iframes:
+                        self.mellowtel_iframe_urls.update(new_iframes)
 
-                    print(f"[SUCCESS] Mellowtel iframe(s) detected! Tracking {len(iframe_urls)} iframe URL(s) and {len(self.mellowtel_domains)} domain(s)")
-                    print(f"[INFO] Waiting {self.iframe_wait_time} seconds to capture Mellowtel activity...")
+                        # Extract and track domains from new iframe URLs
+                        for iframe_url in new_iframes:
+                            domain = self.extract_domain(iframe_url)
+                            if domain:
+                                self.mellowtel_domains.add(domain)
+                                print(f"[INFO] Tracking new domain: {domain}")
 
-                    # Wait 5 minutes after detection with scrolling every minute
-                    wait_elapsed = 0
-                    while wait_elapsed < self.iframe_wait_time:
-                        # Scroll every 60 seconds
-                        if wait_elapsed > 0 and wait_elapsed % 60 == 0:
-                            self.scroll_page()
+                        total_iframes_found = len(self.mellowtel_iframe_urls)
+                        print(f"[SUCCESS] New Mellowtel iframe(s) detected! Total tracking: {total_iframes_found} iframe URL(s) and {len(self.mellowtel_domains)} domain(s)")
 
-                        # Wait in small increments
-                        sleep_time = min(self.iframe_poll_interval, self.iframe_wait_time - wait_elapsed)
-                        time.sleep(sleep_time)
-                        wait_elapsed += sleep_time
-
-                    break
-
-                # Scroll every 60 seconds during iframe detection
+                # Scroll every 60 seconds
                 if elapsed - last_scroll_time >= 60:
                     self.scroll_page()
                     last_scroll_time = elapsed
@@ -629,11 +617,14 @@ class NetworkAnalyzer:
                 time.sleep(self.iframe_poll_interval)
                 elapsed += self.iframe_poll_interval
 
-            if not iframe_detected:
-                print(f"[WARNING] No Mellowtel iframe detected after {self.max_wait_for_iframe} seconds")
+            # Summary of monitoring period
+            if total_iframes_found > 0:
+                print(f"[INFO] Monitoring complete. Total {total_iframes_found} Mellowtel iframe(s) detected and tracked.")
+            else:
+                print(f"[WARNING] No Mellowtel iframes detected after {self.max_wait_for_iframe} seconds")
                 print(f"[INFO] Waiting {self.dwell_time} seconds for any potential Mellowtel activity...")
 
-                # Wait with scrolling every minute
+                # Additional wait with scrolling if no iframes found
                 wait_elapsed = 0
                 while wait_elapsed < self.dwell_time:
                     # Scroll every 60 seconds
