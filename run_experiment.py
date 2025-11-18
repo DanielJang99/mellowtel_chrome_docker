@@ -174,8 +174,23 @@ class NetworkAnalyzer:
             print("[INFO] Getting extension ID...")
 
             # Navigate to chrome://extensions
-            self.driver.get("chrome://extensions/")
-            time.sleep(5)
+            max_retries = 3
+            for ext_attempt in range(max_retries):
+                try:
+                    self.driver.get("chrome://extensions/")
+                    time.sleep(5)
+                    break
+                except RuntimeError as e:
+                    if "dictionary changed size during iteration" in str(e):
+                        if ext_attempt < max_retries - 1:
+                            print(f"[WARNING] RuntimeError navigating to extensions page (selenium-wire cert bug)")
+                            print(f"[INFO] Retrying...")
+                            time.sleep(0.5)
+                        else:
+                            print(f"[ERROR] Failed to navigate to extensions page")
+                            raise
+                    else:
+                        raise
 
             # Enable developer mode to see extension IDs
             script = """
@@ -243,8 +258,23 @@ class NetworkAnalyzer:
 
             # Navigate to chrome://extensions if not already there
             if not self.driver.current_url.startswith('chrome://extensions'):
-                self.driver.get("chrome://extensions/")
-                time.sleep(2)
+                max_retries = 3
+                for enable_attempt in range(max_retries):
+                    try:
+                        self.driver.get("chrome://extensions/")
+                        time.sleep(2)
+                        break
+                    except RuntimeError as e:
+                        if "dictionary changed size during iteration" in str(e):
+                            if enable_attempt < max_retries - 1:
+                                print(f"[WARNING] RuntimeError navigating to extensions (selenium-wire cert bug)")
+                                print(f"[INFO] Retrying...")
+                                time.sleep(0.5)
+                            else:
+                                print(f"[ERROR] Failed to navigate to extensions page for enabling")
+                                return
+                        else:
+                            raise
 
             # Check and enable the extension toggle
             script = f"""
@@ -298,9 +328,24 @@ class NetworkAnalyzer:
 
             # Open extension popup
             print(f"[INFO] Opening extension popup...")
-            self.driver.get(popup_url)
-            time.sleep(2)
-            print(f"[SUCCESS] Navigated to extension popup: {popup_url}")
+            max_retries = 3
+            for popup_attempt in range(max_retries):
+                try:
+                    self.driver.get(popup_url)
+                    time.sleep(2)
+                    print(f"[SUCCESS] Navigated to extension popup: {popup_url}")
+                    break  # Success
+                except RuntimeError as e:
+                    if "dictionary changed size during iteration" in str(e):
+                        if popup_attempt < max_retries - 1:
+                            print(f"[WARNING] RuntimeError opening popup (selenium-wire cert bug) on attempt {popup_attempt + 1}/{max_retries}")
+                            print(f"[INFO] Retrying...")
+                            time.sleep(0.5)
+                        else:
+                            print(f"[ERROR] Failed to open popup after {max_retries} attempts")
+                            return False
+                    else:
+                        raise
 
             # Print the DOM of the extension popup
             try:
@@ -370,9 +415,24 @@ class NetworkAnalyzer:
 
                     # Navigate back to original site
                     print(f"[INFO] Navigating back to site: {original_url}")
-                    self.driver.get(original_url)
-                    time.sleep(2)
-                    print("[INFO] Back on site")
+                    max_retries = 3
+                    for back_attempt in range(max_retries):
+                        try:
+                            self.driver.get(original_url)
+                            time.sleep(2)
+                            print("[INFO] Back on site")
+                            break
+                        except RuntimeError as e:
+                            if "dictionary changed size during iteration" in str(e):
+                                if back_attempt < max_retries - 1:
+                                    print(f"[WARNING] RuntimeError navigating back (selenium-wire cert bug)")
+                                    print(f"[INFO] Retrying...")
+                                    time.sleep(0.5)
+                                else:
+                                    print(f"[ERROR] Failed to navigate back after clicking button")
+                                    return False
+                            else:
+                                raise
 
                     return True
                 else:
@@ -548,29 +608,49 @@ class NetworkAnalyzer:
 
     def save_network_logs(self, site_url: str):
         """Save captured Mellowtel-related network requests to JSONL file."""
-        try:
-            # Ensure output directory exists
-            Path(self.output_file).parent.mkdir(parents=True, exist_ok=True)
+        max_retries = 3
+        retry_delay = 0.5  # seconds
 
-            mellowtel_requests = 0
-            total_requests = len(self.driver.requests)
+        for attempt in range(max_retries):
+            try:
+                # Ensure output directory exists
+                Path(self.output_file).parent.mkdir(parents=True, exist_ok=True)
 
-            with open(self.output_file, 'a') as f:
-                for request in self.driver.requests:
-                    # Filter for Mellowtel-related requests only
-                    if self.is_mellowtel_request(request.url):
-                        request_data = self.extract_request_data(request)
-                        if request_data:
-                            # Add metadata about which site triggered this request
-                            request_data['visited_site'] = site_url
+                mellowtel_requests = 0
+                total_requests = len(self.driver.requests)
 
-                            # Write as JSON Lines format
-                            f.write(json.dumps(request_data) + '\n')
-                            mellowtel_requests += 1
+                with open(self.output_file, 'a') as f:
+                    for request in self.driver.requests:
+                        # Filter for Mellowtel-related requests only
+                        if self.is_mellowtel_request(request.url):
+                            request_data = self.extract_request_data(request)
+                            if request_data:
+                                # Add metadata about which site triggered this request
+                                request_data['visited_site'] = site_url
 
-            print(f"[INFO] Captured {mellowtel_requests} Mellowtel requests out of {total_requests} total requests")
-        except Exception as e:
-            print(f"[ERROR] Failed to save network logs: {e}")
+                                # Write as JSON Lines format
+                                f.write(json.dumps(request_data) + '\n')
+                                mellowtel_requests += 1
+
+                print(f"[INFO] Captured {mellowtel_requests} Mellowtel requests out of {total_requests} total requests")
+                break  # Success, exit retry loop
+
+            except RuntimeError as e:
+                # Handle selenium-wire certificate dictionary iteration error
+                if "dictionary changed size during iteration" in str(e):
+                    if attempt < max_retries - 1:
+                        print(f"[WARNING] RuntimeError (selenium-wire cert bug) on attempt {attempt + 1}/{max_retries}: {e}")
+                        print(f"[INFO] Retrying in {retry_delay} seconds...")
+                        time.sleep(retry_delay)
+                    else:
+                        print(f"[ERROR] Failed to save network logs after {max_retries} attempts: {e}")
+                        print("[WARNING] Some network data may be lost")
+                else:
+                    # Re-raise if it's a different RuntimeError
+                    raise
+            except Exception as e:
+                print(f"[ERROR] Failed to save network logs: {e}")
+                break  # Don't retry for other exceptions
 
     def scroll_page(self):
         """Scroll down the page a bit."""
@@ -617,16 +697,40 @@ class NetworkAnalyzer:
         self.close_all_tabs_except_one()
 
         # Clear previous requests and iframe tracking
-        del self.driver.requests
+        try:
+            del self.driver.requests
+        except RuntimeError as e:
+            # Handle selenium-wire certificate dictionary iteration error
+            print(f"[WARNING] RuntimeError clearing requests (selenium-wire cert bug): {e}")
+            print("[INFO] Continuing anyway - this is a known selenium-wire issue")
+
         self.mellowtel_iframe_urls.clear()
         self.mellowtel_domains.clear()
         self.iframe_metadata.clear()
 
-        try:
-            # Navigate to the URL
-            self.driver.get(url)
-            print(f"[INFO] Page loaded.")
+        max_retries = 3
+        for nav_attempt in range(max_retries):
+            try:
+                # Navigate to the URL
+                self.driver.get(url)
+                print(f"[INFO] Page loaded.")
+                break  # Success, exit retry loop
 
+            except RuntimeError as e:
+                # Handle selenium-wire certificate dictionary iteration error
+                if "dictionary changed size during iteration" in str(e):
+                    if nav_attempt < max_retries - 1:
+                        print(f"[WARNING] RuntimeError during navigation (selenium-wire cert bug) on attempt {nav_attempt + 1}/{max_retries}: {e}")
+                        print(f"[INFO] Retrying navigation...")
+                        time.sleep(0.5)
+                    else:
+                        print(f"[ERROR] Failed to navigate after {max_retries} attempts")
+                        raise
+                else:
+                    # Re-raise if it's a different RuntimeError
+                    raise
+
+        try:
             # Set monitoring start time
             self.monitoring_start_time = time.time()
 
