@@ -3,7 +3,8 @@
 # Set variables
 PROJECT_DIR="/home/ec2-user/mellowtel_chrome_docker"
 mkdir -p "$PROJECT_DIR/logs"
-LOG_FILE="$PROJECT_DIR/logs/mellowtel_cron.log"
+TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+LOG_FILE="$PROJECT_DIR/logs/mellowtel_cron_${TIMESTAMP}.log"
 
 # Log start
 echo "========================================" >> "$LOG_FILE"
