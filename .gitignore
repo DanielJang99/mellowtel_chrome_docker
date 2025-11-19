@@ -37,3 +37,6 @@ Thumbs.db
 
 # Project-specific
 CLAUDE.md
+analysis/
+plots/
+analyze_mellowtel_risks.py

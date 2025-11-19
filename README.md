@@ -54,8 +54,6 @@ This tool:
 - Captures ALL network requests (webpage + extension)
 - Saves detailed network logs in JSON Lines format
 
-**Purpose**: Security research analyzing bandwidth-as-a-service (BaaS) models.
-
 ## Configuration
 
 ### Modify Sites to Visit
@@ -160,10 +158,15 @@ git clone <repo-url>
 
 ## Output Format
 
-Network logs in `output/network_logs.jsonl` (JSON Lines format):
+Each experiment run creates a timestamped directory: `output/run_YYYYMMDD_HHMMSS/`
+
+All output files for that run are saved in this directory:
+
+### Network Logs
+`output/run_YYYYMMDD_HHMMSS/network_logs.jsonl` (JSON Lines format):
 ```json
 {
-  "timestamp": "2025-11-04T19:30:00.000Z",
+  "timestamp": 1763420740,
   "url": "https://example.com/api/data",
   "method": "GET",
   "request_headers": {
@@ -182,6 +185,65 @@ Network logs in `output/network_logs.jsonl` (JSON Lines format):
 ```
 
 Each line represents one network request with full metadata.
+
+### Speed Test Results
+`output/run_YYYYMMDD_HHMMSS/speedtest.json`:
+```json
+{
+  "download": 125680000.0,
+  "upload": 45320000.0,
+  "ping": 12.5,
+  "server": {
+    "sponsor": "ISP Name",
+    "name": "City, Country"
+  },
+  "timestamp": "2025-11-18T17:30:00.000000",
+  "client": {
+    "ip": "1.2.3.4",
+    "isp": "Internet Service Provider"
+  }
+}
+```
+
+This allows you to correlate network conditions with experiment results.
+
+### Iframe Metadata
+`output/run_YYYYMMDD_HHMMSS/iframe_metadata.jsonl`:
+```json
+{
+  "visited_site": "https://www.example.com",
+  "src": "https://iframe-domain.com/page",
+  "id": "mllwtl-frame-id",
+  "data_id": "",
+  "domain": "iframe-domain.com",
+  "first_seen": 114.77,
+  "last_seen": 313.92,
+  "duration_seconds": 199.15
+}
+```
+
+Tracks when Mellowtel iframes were injected and how long they persisted.
+
+### POST Payloads
+Whenever a POST request is sent to `https://request.mellow.tel` with a content-type header containing "text" (e.g., `text/plain`, `text/html`), the request body is automatically saved to a separate file in `output/run_YYYYMMDD_HHMMSS/post_payloads/`.
+
+Each file contains:
+```
+POST Payload Capture
+======================================================================
+Timestamp: 2025-11-18T17:30:00.000000
+Visited Site: https://www.example.com
+URL: https://request.mellow.tel/
+Content-Type: text/plain
+Content-Length: 89851 bytes
+======================================================================
+
+[Request body content here...]
+```
+
+Filenames follow the pattern: `post_payload_0001_YYYYMMDD_HHMMSS_microseconds_site.txt`
+
+This allows you to analyze what data Mellowtel is exfiltrating to its servers.
 
 ## Troubleshooting
 
@@ -218,20 +280,24 @@ docker system prune -a
 
 ```
 mellowtel_chrome_docker/
-├── Dockerfile              # Chrome + Python container
-├── docker-compose.yml      # Container orchestration
-├── requirements.txt        # Python dependencies
-├── run_experiment.py       # Main control script
-├── analyze_logs.py         # Network log analysis
-├── test_minimal.py         # Chrome test script
-├── diagnose.py             # Diagnostic tool
-├── sites.txt               # URLs to visit
-├── IdleForest.crx          # Extension file (you provide)
-├── output/                 # Network logs output
-│   └── network_logs.jsonl
-├── README.md               # This file
-├── README_USAGE.md         # Detailed usage guide
-└── CLAUDE.md               # Developer guidance
+├── Dockerfile                  # Chrome + Python container
+├── docker-compose.yml          # Container orchestration
+├── requirements.txt            # Python dependencies
+├── entrypoint.sh               # Startup script (runs speedtest then experiment)
+├── run_experiment.py           # Main control script
+├── test_minimal.py             # Chrome test script
+├── diagnose.py                 # Diagnostic tool
+├── sites.txt                   # URLs to visit
+├── IdleForest.crx              # Extension file (you provide)
+├── output/                     # Experiment output (one subdirectory per run)
+│   └── run_YYYYMMDD_HHMMSS/    # Timestamped run directory
+│       ├── speedtest.json      # Network speed test results
+│       ├── network_logs.jsonl  # Network request logs
+│       ├── iframe_metadata.jsonl # Iframe injection tracking
+│       └── post_payloads/      # POST request bodies to request.mellow.tel
+├── README.md                   # This file
+├── README_USAGE.md             # Detailed usage guide
+└── CLAUDE.md                   # Developer guidance
 ```
 
 ## Requirements
@@ -268,15 +334,9 @@ nano sites.txt
 # 2. Run experiment (16 sites × 60 seconds = ~16 minutes)
 docker-compose up
 
-# 3. Analyze results
-docker-compose run --rm mellowtel-analyzer python analyze_logs.py
-
-# 4. Export to CSV for further analysis
-# (Analysis script offers CSV export option)
-
-# 5. Examine suspicious domains
-cat output/network_logs.jsonl | jq 'select(.url | contains("suspicious-domain"))'
-```
+# 3. Check output directory (shows timestamped run)
+ls -l output/
+# drwxr-xr-x  run_20251118_173000/
 
 ## Support
 

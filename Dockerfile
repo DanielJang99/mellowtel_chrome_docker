@@ -42,6 +42,7 @@ RUN apt-get update && apt-get install -y \
     libasound2 \
     libatk1.0-0 \
     libcups2 \
+    speedtest-cli \
     --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
@@ -76,6 +77,10 @@ COPY diagnose.py .
 COPY test_minimal.py .
 COPY sites.txt .
 COPY IdleForest.crx .
+COPY entrypoint.sh .
+
+# Make entrypoint script executable
+RUN chmod +x entrypoint.sh
 
 # Create output directory
 RUN mkdir -p /app/output
@@ -83,5 +88,5 @@ RUN mkdir -p /app/output
 # Set environment variables
 ENV PYTHONUNBUFFERED=1
 
-# Run the experiment
-CMD ["python", "run_experiment.py"]
+# Run the entrypoint script (which runs speedtest then experiment)
+CMD ["./entrypoint.sh"]

@@ -32,10 +32,13 @@ class NetworkAnalyzer:
         self.sites_file = 'sites.txt'
         self.extension_path = 'IdleForest.crx'
 
-        # Generate timestamped output filenames
+        # Generate timestamped output directory
         timestamp = datetime.utcnow().strftime('%Y%m%d_%H%M%S')
-        self.output_file = f'output/network_logs_{timestamp}.jsonl'
-        self.iframe_metadata_file = f'output/iframe_metadata_{timestamp}.jsonl'
+        self.timestamp = timestamp
+        self.run_dir = f'output/run_{timestamp}'
+        self.output_file = f'{self.run_dir}/network_logs.jsonl'
+        self.iframe_metadata_file = f'{self.run_dir}/iframe_metadata.jsonl'
+        self.post_payloads_dir = f'{self.run_dir}/post_payloads'
 
         self.driver = None
         self.mellowtel_iframe_urls = set()  # Track iframe URLs for filtering
@@ -44,6 +47,7 @@ class NetworkAnalyzer:
         self.extension_id = None  # Store extension ID for activation
         self.extension_activated = False  # Track if extension has been activated
         self.monitoring_start_time = None  # Track when monitoring started
+        self.post_payload_counter = 0  # Counter for POST payload files
 
     def setup_chrome_options(self) -> Options:
         """Configure Chrome options for the experiment."""
@@ -347,16 +351,6 @@ class NetworkAnalyzer:
                     else:
                         raise
 
-            # Print the DOM of the extension popup
-            try:
-                popup_html = self.driver.page_source
-                print("[INFO] Extension Popup DOM:")
-                print("=" * 70)
-                print(popup_html)
-                print("=" * 70)
-            except Exception as e:
-                print(f"[WARNING] Could not retrieve popup DOM: {e}")
-
             # Look for "Start Planting" button
             print("[INFO] Looking for 'Start Planting' button...")
 
@@ -381,11 +375,6 @@ class NetworkAnalyzer:
 
                 all_buttons = self.driver.execute_script(list_buttons_script)
                 print(f"[INFO] Found {len(all_buttons)} button(s) in popup:")
-                for btn_info in all_buttons:
-                    print(f"  Button {btn_info['index']}:")
-                    print(f"    innerText: '{btn_info['innerText']}'")
-                    print(f"    textContent: '{btn_info['textContent']}'")
-                    print(f"    innerHTML: '{btn_info['innerHTML']}'")
 
                 # Find button with text containing "Start Planting" (case-insensitive)
                 find_button_script = """
@@ -606,6 +595,78 @@ class NetworkAnalyzer:
         except Exception as e:
             print(f"[ERROR] Failed to save iframe metadata: {e}")
 
+    def save_post_payload(self, request, site_url: str):
+        """
+        Save POST request payload to a separate file if it's to request.mellow.tel
+        and content-type includes 'text'.
+        """
+        try:
+            # Check if this is a POST request to request.mellow.tel
+            if request.method != 'POST' or 'request.mellow.tel' not in request.url:
+                return
+
+            # Check if content-type includes 'text'
+            content_type = ''
+            if hasattr(request, 'headers') and 'content-type' in request.headers:
+                content_type = request.headers['content-type'].lower()
+
+            if 'text' not in content_type:
+                return
+
+            # Ensure output directory exists
+            Path(self.post_payloads_dir).mkdir(parents=True, exist_ok=True)
+
+            # Get request body
+            body = None
+            if hasattr(request, 'body'):
+                body = request.body
+
+            if body is None:
+                print(f"[WARNING] POST request to request.mellow.tel has no body")
+                return
+
+            # Increment counter
+            self.post_payload_counter += 1
+
+            # Create filename with timestamp, counter, and visited site
+            safe_site = site_url.replace('https://', '').replace('http://', '').replace('/', '_')[:50]
+            timestamp_str = datetime.utcnow().strftime('%Y%m%d_%H%M%S_%f')
+            filename = f"post_payload_{self.post_payload_counter:04d}_{timestamp_str}_{safe_site}.txt"
+            filepath = Path(self.post_payloads_dir) / filename
+
+            # Decode body if it's bytes
+            if isinstance(body, bytes):
+                try:
+                    body_text = body.decode('utf-8')
+                except UnicodeDecodeError:
+                    # If UTF-8 fails, try latin-1
+                    try:
+                        body_text = body.decode('latin-1')
+                    except:
+                        # Save as hex if decoding fails
+                        body_text = f"[Binary data, hex dump]:\n{body.hex()}"
+            else:
+                body_text = str(body)
+
+            # Save to file with metadata header
+            with open(filepath, 'w', encoding='utf-8') as f:
+                f.write(f"POST Payload Capture\n")
+                f.write(f"=" * 70 + "\n")
+                f.write(f"Timestamp: {datetime.utcnow().isoformat()}\n")
+                f.write(f"Visited Site: {site_url}\n")
+                f.write(f"URL: {request.url}\n")
+                f.write(f"Content-Type: {content_type}\n")
+                f.write(f"Content-Length: {len(body) if body else 0} bytes\n")
+                f.write(f"=" * 70 + "\n\n")
+                f.write(body_text)
+
+            print(f"[POST] Saved POST payload to: {filename} ({len(body) if body else 0} bytes)")
+
+        except Exception as e:
+            print(f"[WARNING] Failed to save POST payload: {e}")
+            import traceback
+            traceback.print_exc()
+
     def save_network_logs(self, site_url: str):
         """Save captured Mellowtel-related network requests to JSONL file."""
         max_retries = 3
@@ -621,6 +682,9 @@ class NetworkAnalyzer:
 
                 with open(self.output_file, 'a') as f:
                     for request in self.driver.requests:
+                        # Check and save POST payloads if applicable
+                        self.save_post_payload(request, site_url)
+
                         # Filter for Mellowtel-related requests only
                         if self.is_mellowtel_request(request.url):
                             request_data = self.extract_request_data(request)
@@ -821,6 +885,23 @@ class NetworkAnalyzer:
             except:
                 pass
 
+    def move_speedtest_file(self):
+        """Move speedtest JSON file from output/ to run directory if it exists."""
+        try:
+            # Look for speedtest file matching our timestamp
+            speedtest_pattern = f'output/speedtest_{self.timestamp}.json'
+            speedtest_file = Path(speedtest_pattern)
+
+            if speedtest_file.exists():
+                # Move to run directory
+                dest_file = Path(self.run_dir) / 'speedtest.json'
+                speedtest_file.rename(dest_file)
+                print(f"[INFO] Moved speedtest results to: {dest_file}")
+            else:
+                print(f"[INFO] No speedtest file found for this run")
+        except Exception as e:
+            print(f"[WARNING] Could not move speedtest file: {e}")
+
     def run_experiment(self):
         """Main experiment execution."""
         print("=" * 70)
@@ -833,13 +914,16 @@ class NetworkAnalyzer:
         print(f"  - Fallback dwell time: {self.dwell_time} seconds (if no iframe detected)")
         print(f"  - Headless mode: {self.headless}")
         print(f"  - Disable images: {self.disable_images}")
-        print(f"  - Network logs file: {self.output_file}")
-        print(f"  - Iframe metadata file: {self.iframe_metadata_file}")
+        print(f"  - Output directory: {self.run_dir}/")
+        print(f"    - Network logs: network_logs.jsonl")
+        print(f"    - Iframe metadata: iframe_metadata.jsonl")
+        print(f"    - POST payloads: post_payloads/")
         print(f"\nFiltering:")
         print(f"  - Only capturing requests to 'request.mellow.tel'")
         print(f"  - Only capturing requests with same domain as Mellowtel iframes")
         print(f"  - Detecting iframes with 'mllwtl' in id/data-id attributes")
         print(f"  - Tracking iframe presence duration")
+        print(f"  - Saving POST payloads to request.mellow.tel with text content-type")
         print("=" * 70)
 
         # Load sites
@@ -848,6 +932,13 @@ class NetworkAnalyzer:
         if not sites:
             print("[ERROR] No sites to visit. Exiting.")
             sys.exit(1)
+
+        # Create run directory
+        Path(self.run_dir).mkdir(parents=True, exist_ok=True)
+        print(f"[INFO] Created output directory: {self.run_dir}/")
+
+        # Move speedtest file into run directory if it exists
+        self.move_speedtest_file()
 
         # Initialize driver
         self.initialize_driver()
@@ -862,8 +953,14 @@ class NetworkAnalyzer:
 
             print("\n" + "=" * 70)
             print("Experiment completed successfully!")
-            print(f"Network logs saved to: {self.output_file}")
-            print(f"Iframe metadata saved to: {self.iframe_metadata_file}")
+            print(f"\nAll output saved to: {self.run_dir}/")
+            print(f"  - Speedtest: speedtest.json")
+            print(f"  - Network logs: network_logs.jsonl")
+            print(f"  - Iframe metadata: iframe_metadata.jsonl")
+            if self.post_payload_counter > 0:
+                print(f"  - POST payloads: {self.post_payload_counter} files in post_payloads/")
+            else:
+                print(f"  - POST payloads: none captured (no text content-type)")
             print("=" * 70)
 
         except KeyboardInterrupt:
