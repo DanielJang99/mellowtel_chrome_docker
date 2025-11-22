@@ -49,6 +49,10 @@ class NetworkAnalyzer:
         self.monitoring_start_time = None  # Track when monitoring started
         self.post_payload_counter = 0  # Counter for POST payload files
 
+        # Track requests per iframe/domain for aggregated writing
+        self.iframe_requests = {}  # {iframe_src: {'domain': str, 'requests': [request_data]}}
+        self.current_visible_iframes = set()  # Currently visible iframe URLs
+
     def setup_chrome_options(self) -> Options:
         """Configure Chrome options for the experiment."""
         chrome_options = Options()
@@ -670,54 +674,143 @@ class NetworkAnalyzer:
             import traceback
             traceback.print_exc()
 
-    def save_network_logs(self, site_url: str):
-        """Save captured Mellowtel-related network requests to JSONL file."""
+    def aggregate_requests_by_iframe(self, site_url: str):
+        """
+        Aggregate Mellowtel requests by iframe/domain.
+        Stores requests in memory grouped by iframe URL.
+        """
         max_retries = 3
-        retry_delay = 0.5  # seconds
+        retry_delay = 0.5
 
         for attempt in range(max_retries):
             try:
-                # Ensure output directory exists
-                Path(self.output_file).parent.mkdir(parents=True, exist_ok=True)
-
-                mellowtel_requests = 0
                 total_requests = len(self.driver.requests)
+                aggregated_count = 0
 
-                with open(self.output_file, 'a') as f:
-                    for request in self.driver.requests:
-                        # Check and save POST payloads if applicable
-                        self.save_post_payload(request, site_url)
+                for request in self.driver.requests:
+                    # Check and save POST payloads if applicable
+                    self.save_post_payload(request, site_url)
 
-                        # Filter for Mellowtel-related requests only
-                        if self.is_mellowtel_request(request.url):
-                            request_data = self.extract_request_data(request)
-                            if request_data:
-                                # Add metadata about which site triggered this request
-                                request_data['visited_site'] = site_url
+                    # Filter for Mellowtel-related requests only
+                    if self.is_mellowtel_request(request.url):
+                        request_data = self.extract_request_data(request)
+                        if request_data:
+                            # Add metadata about which site triggered this request
+                            request_data['visited_site'] = site_url
 
-                                # Write as JSON Lines format
-                                f.write(json.dumps(request_data) + '\n')
-                                mellowtel_requests += 1
+                            # Determine which iframe this request belongs to
+                            request_domain = self.extract_domain(request.url)
 
-                print(f"[INFO] Captured {mellowtel_requests} Mellowtel requests out of {total_requests} total requests")
-                break  # Success, exit retry loop
+                            # Check if it's a request to request.mellow.tel
+                            if 'request.mellow.tel' in request.url:
+                                # This is a central request, attribute to all current iframes
+                                for iframe_url in self.current_visible_iframes:
+                                    if iframe_url not in self.iframe_requests:
+                                        iframe_domain = self.extract_domain(iframe_url)
+                                        self.iframe_requests[iframe_url] = {
+                                            'domain': iframe_domain,
+                                            'requests': []
+                                        }
+                                    self.iframe_requests[iframe_url]['requests'].append(request_data.copy())
+                                    aggregated_count += 1
+                            else:
+                                # Match request to iframe by domain
+                                for iframe_url in self.current_visible_iframes:
+                                    iframe_domain = self.extract_domain(iframe_url)
+                                    if request_domain == iframe_domain:
+                                        if iframe_url not in self.iframe_requests:
+                                            self.iframe_requests[iframe_url] = {
+                                                'domain': iframe_domain,
+                                                'requests': []
+                                            }
+                                        self.iframe_requests[iframe_url]['requests'].append(request_data)
+                                        aggregated_count += 1
+                                        break
+
+                print(f"[INFO] Aggregated {aggregated_count} requests from {total_requests} total requests")
+                break  # Success
 
             except RuntimeError as e:
-                # Handle selenium-wire certificate dictionary iteration error
                 if "dictionary changed size during iteration" in str(e):
                     if attempt < max_retries - 1:
-                        print(f"[WARNING] RuntimeError (selenium-wire cert bug) on attempt {attempt + 1}/{max_retries}: {e}")
-                        print(f"[INFO] Retrying in {retry_delay} seconds...")
+                        print(f"[WARNING] RuntimeError aggregating requests (attempt {attempt + 1}/{max_retries})")
                         time.sleep(retry_delay)
                     else:
-                        print(f"[ERROR] Failed to save network logs after {max_retries} attempts: {e}")
-                        print("[WARNING] Some network data may be lost")
+                        print(f"[ERROR] Failed to aggregate requests after {max_retries} attempts")
                 else:
-                    # Re-raise if it's a different RuntimeError
                     raise
             except Exception as e:
-                print(f"[ERROR] Failed to save network logs: {e}")
-                break  # Don't retry for other exceptions
+                print(f"[ERROR] Failed to aggregate requests: {e}")
+                break
+
+    def write_iframe_requests(self, iframe_url: str):
+        """
+        Write all aggregated requests for a specific iframe to the output file.
+        Called when an iframe disappears from the DOM.
+        """
+        try:
+            if iframe_url not in self.iframe_requests:
+                return
+
+            # Ensure output directory exists
+            Path(self.output_file).parent.mkdir(parents=True, exist_ok=True)
+
+            iframe_data = self.iframe_requests[iframe_url]
+            request_count = len(iframe_data['requests'])
+
+            if request_count > 0:
+                with open(self.output_file, 'a') as f:
+                    for request_data in iframe_data['requests']:
+                        # Add iframe attribution
+                        request_data['iframe_src'] = iframe_url
+                        request_data['iframe_domain'] = iframe_data['domain']
+
+                        # Write as JSON Lines format
+                        f.write(json.dumps(request_data) + '\n')
+
+                print(f"[WRITE] Wrote {request_count} requests for iframe: {iframe_data['domain']}")
+
+            # Remove from memory
+            del self.iframe_requests[iframe_url]
+
+        except Exception as e:
+            print(f"[ERROR] Failed to write iframe requests: {e}")
+
+    def write_all_remaining_requests(self):
+        """
+        Write all remaining aggregated requests to file.
+        Called at the end of site monitoring when iframes may still be visible.
+        """
+        try:
+            if not self.iframe_requests:
+                print("[INFO] No remaining requests to write")
+                return
+
+            Path(self.output_file).parent.mkdir(parents=True, exist_ok=True)
+
+            total_written = 0
+            for iframe_url, iframe_data in list(self.iframe_requests.items()):
+                request_count = len(iframe_data['requests'])
+
+                if request_count > 0:
+                    with open(self.output_file, 'a') as f:
+                        for request_data in iframe_data['requests']:
+                            # Add iframe attribution
+                            request_data['iframe_src'] = iframe_url
+                            request_data['iframe_domain'] = iframe_data['domain']
+
+                            # Write as JSON Lines format
+                            f.write(json.dumps(request_data) + '\n')
+
+                    total_written += request_count
+                    print(f"[WRITE] Wrote {request_count} remaining requests for iframe: {iframe_data['domain']}")
+
+            # Clear all
+            self.iframe_requests.clear()
+            print(f"[INFO] Total remaining requests written: {total_written}")
+
+        except Exception as e:
+            print(f"[ERROR] Failed to write remaining requests: {e}")
 
     def scroll_page(self):
         """Scroll down the page a bit."""
@@ -774,6 +867,8 @@ class NetworkAnalyzer:
         self.mellowtel_iframe_urls.clear()
         self.mellowtel_domains.clear()
         self.iframe_metadata.clear()
+        self.iframe_requests.clear()
+        self.current_visible_iframes.clear()
 
         max_retries = 3
         for nav_attempt in range(max_retries):
@@ -812,11 +907,15 @@ class NetworkAnalyzer:
             # Poll for Mellowtel iframe detection continuously
             elapsed = 0
             last_scroll_time = 0  # Track when we last scrolled
+            last_aggregate_time = 0  # Track when we last aggregated requests
             total_iframes_found = 0
+            aggregate_interval = 5  # Aggregate requests every 5 seconds
 
             while elapsed < self.max_wait_for_iframe:
                 iframe_data_list = self.check_for_mellowtel_iframes()
 
+                # Get currently visible iframe URLs
+                currently_visible = set()
                 if iframe_data_list:
                     current_time = time.time() - self.monitoring_start_time
 
@@ -824,9 +923,11 @@ class NetworkAnalyzer:
                     for iframe_data in iframe_data_list:
                         self.update_iframe_metadata(iframe_data, current_time)
 
-                    # Extract URLs for tracking
-                    iframe_urls_set = set(iframe['src'] for iframe in iframe_data_list)
-                    new_iframes = iframe_urls_set - self.mellowtel_iframe_urls
+                    # Extract URLs for currently visible iframes
+                    currently_visible = set(iframe['src'] for iframe in iframe_data_list)
+
+                    # Detect new iframes
+                    new_iframes = currently_visible - self.mellowtel_iframe_urls
 
                     if new_iframes:
                         self.mellowtel_iframe_urls.update(new_iframes)
@@ -840,6 +941,24 @@ class NetworkAnalyzer:
 
                         total_iframes_found = len(self.mellowtel_iframe_urls)
                         print(f"[SUCCESS] New Mellowtel iframe(s) detected! Total tracking: {total_iframes_found} iframe URL(s) and {len(self.mellowtel_domains)} domain(s)")
+
+                # Detect disappeared iframes (iframes that were visible but are no longer)
+                disappeared_iframes = self.current_visible_iframes - currently_visible
+                if disappeared_iframes:
+                    for iframe_url in disappeared_iframes:
+                        print(f"[IFRAME] Iframe disappeared: {self.extract_domain(iframe_url)}")
+                        # Aggregate any new requests before writing
+                        self.aggregate_requests_by_iframe(url)
+                        # Write requests for this iframe to file
+                        self.write_iframe_requests(iframe_url)
+
+                # Update current visible iframes
+                self.current_visible_iframes = currently_visible
+
+                # Aggregate requests periodically
+                if elapsed - last_aggregate_time >= aggregate_interval:
+                    self.aggregate_requests_by_iframe(url)
+                    last_aggregate_time = elapsed
 
                 # Scroll every 60 seconds
                 if elapsed - last_scroll_time >= 60:
@@ -869,21 +988,28 @@ class NetworkAnalyzer:
                     time.sleep(sleep_time)
                     wait_elapsed += sleep_time
 
-            # Save captured network requests (filtered for Mellowtel)
-            self.save_network_logs(url)
+            # Final aggregation of any remaining requests
+            print(f"[INFO] Performing final request aggregation...")
+            self.aggregate_requests_by_iframe(url)
+
+            # Write all remaining requests to file (for iframes still visible)
+            self.write_all_remaining_requests()
 
             # Save iframe metadata
             self.save_iframe_metadata(url)
 
         except TimeoutException:
             print(f"[WARNING] Timeout loading {url} - continuing...")
-            self.save_network_logs(url)
+            # Aggregate and write remaining requests
+            self.aggregate_requests_by_iframe(url)
+            self.write_all_remaining_requests()
             self.save_iframe_metadata(url)
         except Exception as e:
             print(f"[ERROR] Error visiting {url}: {e}")
             # Try to save whatever data we have
             try:
-                self.save_network_logs(url)
+                self.aggregate_requests_by_iframe(url)
+                self.write_all_remaining_requests()
                 self.save_iframe_metadata(url)
             except:
                 pass
@@ -921,11 +1047,13 @@ class NetworkAnalyzer:
         print(f"    - Network logs: network_logs.jsonl")
         print(f"    - Iframe metadata: iframe_metadata.jsonl")
         print(f"    - POST payloads: post_payloads/")
-        print(f"\nFiltering:")
+        print(f"\nFiltering & Aggregation:")
         print(f"  - Only capturing requests to 'request.mellow.tel'")
         print(f"  - Only capturing requests with same domain as Mellowtel iframes")
         print(f"  - Detecting iframes with 'mllwtl' in id/data-id attributes")
         print(f"  - Tracking iframe presence duration")
+        print(f"  - Aggregating requests by iframe/domain")
+        print(f"  - Writing to file when iframe disappears from DOM")
         print(f"  - Saving POST payloads to request.mellow.tel with text content-type")
         print("=" * 70)
 
