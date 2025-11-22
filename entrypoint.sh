@@ -1,6 +1,16 @@
 #!/bin/bash
 set -e
 
+echo "========================================"
+echo "Starting Xvfb Virtual Display"
+echo "========================================"
+export DISPLAY=:99
+Xvfb :99 -screen 0 1920x1080x24 -ac +extension GLX +render -noreset &
+XVFB_PID=$!
+echo "[INFO] Xvfb started on display :99 (PID: $XVFB_PID)"
+
+sleep 2
+
 # Generate timestamp for this run
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 OUTPUT_DIR="/app/output"

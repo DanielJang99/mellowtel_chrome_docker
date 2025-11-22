@@ -67,10 +67,18 @@ nano sites.txt
 Edit `docker-compose.yml`:
 ```yaml
 environment:
-  - DWELL_TIME=60      # Seconds to wait on each page
-  - HEADLESS=true      # Run Chrome in headless mode
+  - DWELL_TIME=60         # Seconds to wait on each page
+  - HEADLESS=false        # false = Xvfb (normal Chrome UA), true = headless (HeadlessChrome UA)
   - DISABLE_IMAGES=false  # Set to true for faster execution
 ```
+
+**Important - User Agent Detection:**
+- **HEADLESS=false** (default): Uses Xvfb virtual display, User-Agent shows as normal Chrome
+  - Example: `Mozilla/5.0 (X11; Linux x86_64) ... Chrome/136.0.0.0 Safari/537.36`
+- **HEADLESS=true**: Uses headless Chrome, User-Agent shows as HeadlessChrome (easily detected)
+  - Example: `Mozilla/5.0 (X11; Linux x86_64) ... HeadlessChrome/136.0.0.0 Safari/537.36`
+
+For stealth research on AWS EC2 or any server, use `HEADLESS=false` with Xvfb.
 
 ## Analyzing Results
 
@@ -128,6 +136,8 @@ docker system prune -a
 3. Install Docker and Docker Compose
 4. Transfer project files
 5. Run `docker-compose up`
+
+**Note on Xvfb:** Xvfb (X Virtual Frame Buffer) works perfectly on AWS EC2 and other cloud servers. It provides a virtual display so Chrome runs in non-headless mode without a physical display, avoiding the "HeadlessChrome" user agent signature. This is automatically configured in the Docker container.
 
 ### Google Cloud Platform
 ```bash

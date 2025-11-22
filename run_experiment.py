@@ -27,7 +27,7 @@ class NetworkAnalyzer:
         self.iframe_wait_time = 300  # 5 minutes after iframe detection
         self.iframe_poll_interval = 1  # Check for iframe every 2 seconds
         self.max_wait_for_iframe = 300  # Maximum 5 minutes to wait for iframe to appear
-        self.headless = os.getenv('HEADLESS', 'true').lower() == 'true'
+        self.headless = os.getenv('HEADLESS', 'false').lower() == 'true'
         self.disable_images = os.getenv('DISABLE_IMAGES', 'false').lower() == 'true'
         self.sites_file = 'sites.txt'
         self.extension_path = 'IdleForest.crx'
@@ -60,9 +60,12 @@ class NetworkAnalyzer:
         chrome_options.add_argument('--disable-setuid-sandbox')
         chrome_options.add_argument('--disable-software-rasterizer')
 
-        # Headless mode (use old headless for better Docker compatibility)
+        # Headless mode (only use if explicitly enabled, Xvfb is preferred to avoid HeadlessChrome user agent)
         if self.headless:
             chrome_options.add_argument('--headless')
+            print("[INFO] Using headless mode (User-Agent will show 'HeadlessChrome')")
+        else:
+            print("[INFO] Using Xvfb virtual display (User-Agent will show normal 'Chrome')")
 
         # Remote debugging (helps with stability)
         chrome_options.add_argument('--remote-debugging-port=9222')
