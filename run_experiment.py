@@ -52,6 +52,7 @@ class NetworkAnalyzer:
         # Track requests per iframe/domain for aggregated writing
         self.iframe_requests = {}  # {iframe_src: {'domain': str, 'requests': [request_data]}}
         self.current_visible_iframes = set()  # Currently visible iframe URLs
+        self.last_processed_request_index = 0  # Track which requests we've already processed
 
     def setup_chrome_options(self) -> Options:
         """Configure Chrome options for the experiment."""
@@ -674,20 +675,25 @@ class NetworkAnalyzer:
             import traceback
             traceback.print_exc()
 
-    def aggregate_requests_by_iframe(self, site_url: str):
+    def process_new_requests(self, site_url: str):
         """
-        Aggregate Mellowtel requests by iframe/domain.
+        Process new requests since last check and categorize by iframe.
         Stores requests in memory grouped by iframe URL.
         """
-        max_retries = 3
-        retry_delay = 0.5
+        try:
+            total_requests = len(self.driver.requests)
 
-        for attempt in range(max_retries):
-            try:
-                total_requests = len(self.driver.requests)
-                aggregated_count = 0
+            # Only process new requests since last check
+            if self.last_processed_request_index >= total_requests:
+                return  # No new requests
 
-                for request in self.driver.requests:
+            new_request_count = 0
+
+            # Process only new requests
+            for i in range(self.last_processed_request_index, total_requests):
+                try:
+                    request = self.driver.requests[i]
+
                     # Check and save POST payloads if applicable
                     self.save_post_payload(request, site_url)
 
@@ -712,7 +718,7 @@ class NetworkAnalyzer:
                                             'requests': []
                                         }
                                     self.iframe_requests[iframe_url]['requests'].append(request_data.copy())
-                                    aggregated_count += 1
+                                    new_request_count += 1
                             else:
                                 # Match request to iframe by domain
                                 for iframe_url in self.current_visible_iframes:
@@ -724,24 +730,25 @@ class NetworkAnalyzer:
                                                 'requests': []
                                             }
                                         self.iframe_requests[iframe_url]['requests'].append(request_data)
-                                        aggregated_count += 1
+                                        new_request_count += 1
                                         break
 
-                print(f"[INFO] Aggregated {aggregated_count} requests from {total_requests} total requests")
-                break  # Success
-
-            except RuntimeError as e:
-                if "dictionary changed size during iteration" in str(e):
-                    if attempt < max_retries - 1:
-                        print(f"[WARNING] RuntimeError aggregating requests (attempt {attempt + 1}/{max_retries})")
-                        time.sleep(retry_delay)
+                except RuntimeError as e:
+                    if "dictionary changed size during iteration" in str(e):
+                        # Skip this request and continue
+                        print(f"[WARNING] RuntimeError processing request {i}, skipping")
+                        continue
                     else:
-                        print(f"[ERROR] Failed to aggregate requests after {max_retries} attempts")
-                else:
-                    raise
-            except Exception as e:
-                print(f"[ERROR] Failed to aggregate requests: {e}")
-                break
+                        raise
+
+            # Update the last processed index
+            self.last_processed_request_index = total_requests
+
+            if new_request_count > 0:
+                print(f"[INFO] Processed {new_request_count} new Mellowtel request(s)")
+
+        except Exception as e:
+            print(f"[ERROR] Failed to process new requests: {e}")
 
     def write_iframe_requests(self, iframe_url: str):
         """
@@ -869,6 +876,7 @@ class NetworkAnalyzer:
         self.iframe_metadata.clear()
         self.iframe_requests.clear()
         self.current_visible_iframes.clear()
+        self.last_processed_request_index = 0
 
         max_retries = 3
         for nav_attempt in range(max_retries):
@@ -907,9 +915,7 @@ class NetworkAnalyzer:
             # Poll for Mellowtel iframe detection continuously
             elapsed = 0
             last_scroll_time = 0  # Track when we last scrolled
-            last_aggregate_time = 0  # Track when we last aggregated requests
             total_iframes_found = 0
-            aggregate_interval = 5  # Aggregate requests every 5 seconds
 
             while elapsed < self.max_wait_for_iframe:
                 iframe_data_list = self.check_for_mellowtel_iframes()
@@ -945,20 +951,19 @@ class NetworkAnalyzer:
                 # Detect disappeared iframes (iframes that were visible but are no longer)
                 disappeared_iframes = self.current_visible_iframes - currently_visible
                 if disappeared_iframes:
+                    # Process any remaining new requests before writing
+                    self.process_new_requests(url)
+
                     for iframe_url in disappeared_iframes:
                         print(f"[IFRAME] Iframe disappeared: {self.extract_domain(iframe_url)}")
-                        # Aggregate any new requests before writing
-                        self.aggregate_requests_by_iframe(url)
                         # Write requests for this iframe to file
                         self.write_iframe_requests(iframe_url)
 
                 # Update current visible iframes
                 self.current_visible_iframes = currently_visible
 
-                # Aggregate requests periodically
-                if elapsed - last_aggregate_time >= aggregate_interval:
-                    self.aggregate_requests_by_iframe(url)
-                    last_aggregate_time = elapsed
+                # Process new requests on each iteration
+                self.process_new_requests(url)
 
                 # Scroll every 60 seconds
                 if elapsed - last_scroll_time >= 60:
@@ -988,9 +993,9 @@ class NetworkAnalyzer:
                     time.sleep(sleep_time)
                     wait_elapsed += sleep_time
 
-            # Final aggregation of any remaining requests
-            print(f"[INFO] Performing final request aggregation...")
-            self.aggregate_requests_by_iframe(url)
+            # Process any final new requests
+            print(f"[INFO] Processing final requests...")
+            self.process_new_requests(url)
 
             # Write all remaining requests to file (for iframes still visible)
             self.write_all_remaining_requests()
@@ -1000,15 +1005,15 @@ class NetworkAnalyzer:
 
         except TimeoutException:
             print(f"[WARNING] Timeout loading {url} - continuing...")
-            # Aggregate and write remaining requests
-            self.aggregate_requests_by_iframe(url)
+            # Process and write remaining requests
+            self.process_new_requests(url)
             self.write_all_remaining_requests()
             self.save_iframe_metadata(url)
         except Exception as e:
             print(f"[ERROR] Error visiting {url}: {e}")
             # Try to save whatever data we have
             try:
-                self.aggregate_requests_by_iframe(url)
+                self.process_new_requests(url)
                 self.write_all_remaining_requests()
                 self.save_iframe_metadata(url)
             except:
@@ -1052,7 +1057,7 @@ class NetworkAnalyzer:
         print(f"  - Only capturing requests with same domain as Mellowtel iframes")
         print(f"  - Detecting iframes with 'mllwtl' in id/data-id attributes")
         print(f"  - Tracking iframe presence duration")
-        print(f"  - Aggregating requests by iframe/domain")
+        print(f"  - Categorizing requests by iframe/domain in real-time")
         print(f"  - Writing to file when iframe disappears from DOM")
         print(f"  - Saving POST payloads to request.mellow.tel with text content-type")
         print("=" * 70)
