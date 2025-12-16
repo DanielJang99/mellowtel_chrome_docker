@@ -31,7 +31,7 @@ if command -v speedtest-cli &> /dev/null; then
     echo "[INFO] Running speedtest-cli..."
 
     # Run speedtest with JSON output and save
-    speedtest-cli --json > "${SPEEDTEST_FILE}" 2>&1 || {
+    speedtest-cli --secure --json > "${SPEEDTEST_FILE}" 2>&1 || {
         echo "[WARNING] speedtest-cli failed, saving error to file"
         echo "{\"error\": \"speedtest-cli failed\", \"timestamp\": \"${TIMESTAMP}\"}" > "${SPEEDTEST_FILE}"
     }
