@@ -48,6 +48,7 @@ if command -v speedtest-cli &> /dev/null; then
     cat "${SPEEDTEST_FILE}" || echo "[ERROR] Could not read speedtest file"
     echo ""
     echo "----------------------------------------"
+fi
 
 echo ""
 echo "========================================"
