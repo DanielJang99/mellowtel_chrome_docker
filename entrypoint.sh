@@ -15,7 +15,7 @@ sleep 2
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 OUTPUT_DIR="/app/output"
 SPEEDTEST_FILE="${OUTPUT_DIR}/speedtest_${TIMESTAMP}.json"
-
+TIMEOUT=60
 # Ensure output directory exists
 mkdir -p "${OUTPUT_DIR}"
 
@@ -28,50 +28,26 @@ echo ""
 
 # Run speedtest and save results in JSON format
 if command -v speedtest-cli &> /dev/null; then
-    echo "[INFO] Running speedtest-cli..."
+    echo "[INFO] Running speedtest-cli with ${TIMEOUT} second timeout..."
 
-    # Run speedtest with JSON output and save
-    speedtest-cli --secure --json > "${SPEEDTEST_FILE}" 2>&1 || {
-        echo "[WARNING] speedtest-cli failed, saving error to file"
-        echo "{\"error\": \"speedtest-cli failed\", \"timestamp\": \"${TIMESTAMP}\"}" > "${SPEEDTEST_FILE}"
+    # Run speedtest with JSON output and save (with generous timeout)
+    timeout ${TIMEOUT} speedtest-cli --secure --json > "${SPEEDTEST_FILE}" 2>&1 || {
+        EXIT_CODE=$?
+        if [ $EXIT_CODE -eq 124 ]; then
+            echo "[WARNING] speedtest-cli timed out after ${TIMEOUT} seconds"
+            echo "{\"error\": \"timeout after ${TIMEOUT} seconds\", \"timestamp\": \"${TIMESTAMP}\"}" > "${SPEEDTEST_FILE}"
+        else
+            echo "[WARNING] speedtest-cli failed with exit code $EXIT_CODE"
+            echo "{\"error\": \"speedtest-cli failed\", \"exit_code\": $EXIT_CODE, \"timestamp\": \"${TIMESTAMP}\"}" > "${SPEEDTEST_FILE}"
+        fi
     }
 
-    # Parse and display key metrics if speedtest succeeded
-    if [ -f "${SPEEDTEST_FILE}" ] && grep -q "download" "${SPEEDTEST_FILE}"; then
-        echo ""
-        echo "[SUCCESS] Speed test completed!"
-
-        # Extract key metrics using python
-        python3 -c "
-import json
-import sys
-try:
-    with open('${SPEEDTEST_FILE}', 'r') as f:
-        data = json.load(f)
-
-    download_mbps = data.get('download', 0) / 1_000_000
-    upload_mbps = data.get('upload', 0) / 1_000_000
-    ping = data.get('ping', 0)
-    server = data.get('server', {}).get('sponsor', 'Unknown')
-    location = data.get('server', {}).get('name', 'Unknown')
-
-    print(f'  Server: {server} ({location})')
-    print(f'  Ping: {ping:.2f} ms')
-    print(f'  Download: {download_mbps:.2f} Mbps')
-    print(f'  Upload: {upload_mbps:.2f} Mbps')
-except Exception as e:
-    print(f'  [WARNING] Could not parse speedtest results: {e}', file=sys.stderr)
-" || echo "  [WARNING] Could not display speedtest metrics"
-    else
-        echo "[WARNING] Speed test did not complete successfully"
-    fi
-
     echo ""
-    echo "[INFO] Speedtest results saved to: ${SPEEDTEST_FILE}"
-else
-    echo "[WARNING] speedtest-cli not found, skipping speed test"
-    echo "{\"error\": \"speedtest-cli not installed\", \"timestamp\": \"${TIMESTAMP}\"}" > "${SPEEDTEST_FILE}"
-fi
+    echo "[INFO] Speedtest file contents:"
+    echo "----------------------------------------"
+    cat "${SPEEDTEST_FILE}" || echo "[ERROR] Could not read speedtest file"
+    echo ""
+    echo "----------------------------------------"
 
 echo ""
 echo "========================================"
