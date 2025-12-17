@@ -16,7 +16,20 @@ cd "$PROJECT_DIR" || {
     exit 1
 }
 
+# Check if there's already a container running and kill it
+echo "$(date): Checking for existing containers..." >> "$LOG_FILE"
+RUNNING_CONTAINERS=$(sudo docker ps -q)
+if [ -n "$RUNNING_CONTAINERS" ]; then
+    echo "$(date): Found running containers, stopping them..." >> "$LOG_FILE"
+    sudo docker-compose down >> "$LOG_FILE" 2>&1
+    sudo docker kill $(sudo docker ps -q) >> "$LOG_FILE" 2>&1
+    echo "$(date): Containers stopped" >> "$LOG_FILE"
+else
+    echo "$(date): No existing containers found" >> "$LOG_FILE"
+fi
+
 # Run docker-compose
+echo "$(date): Starting new container..." >> "$LOG_FILE"
 sudo docker-compose up >> "$LOG_FILE" 2>&1
 EXIT_CODE=$?
 

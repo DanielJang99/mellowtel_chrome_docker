@@ -1082,9 +1082,19 @@ class NetworkAnalyzer:
         # Get extension ID for activation
         self.get_extension_id()
 
+        # Track experiment start time for 55-minute timeout
+        experiment_start_time = time.time()
+
         try:
             # Visit each site
             for idx, site in enumerate(sites, 1):
+                # Check if more than 55 minutes have elapsed
+                elapsed_minutes = (time.time() - experiment_start_time) / 60
+                if elapsed_minutes > 55:
+                    print(f"\n[INFO] 55 minutes have elapsed ({elapsed_minutes:.1f} minutes). Finishing experiment early.")
+                    print(f"[INFO] Visited {idx - 1}/{len(sites)} sites before timeout.")
+                    break
+
                 self.visit_site(site, idx, len(sites))
 
             print("\n" + "=" * 70)
