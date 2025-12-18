@@ -25,7 +25,7 @@ class NetworkAnalyzer:
     def __init__(self):
         self.dwell_time = int(os.getenv('DWELL_TIME', '30'))
         self.iframe_wait_time = 300  # 5 minutes after iframe detection
-        self.iframe_poll_interval = 1  # Check for iframe every 2 seconds
+        self.iframe_poll_interval = 2  # Check for iframe every 2 seconds
         self.max_wait_for_iframe = 300  # Maximum 5 minutes to wait for iframe to appear
         self.headless = os.getenv('HEADLESS', 'false').lower() == 'true'
         self.disable_images = os.getenv('DISABLE_IMAGES', 'false').lower() == 'true'
@@ -972,7 +972,7 @@ class NetworkAnalyzer:
 
                 # Wait before next poll
                 time.sleep(self.iframe_poll_interval)
-                elapsed += self.iframe_poll_interval
+                elapsed = int(time.time() - self.monitoring_start_time)
 
             # Summary of monitoring period
             if total_iframes_found > 0:
