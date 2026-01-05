@@ -15,7 +15,6 @@ from urllib.parse import urlparse
 
 from seleniumwire import webdriver
 from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.chrome.service import Service
 from selenium.common.exceptions import WebDriverException, TimeoutException
 
 
@@ -24,7 +23,6 @@ class NetworkAnalyzer:
 
     def __init__(self):
         self.dwell_time = int(os.getenv('DWELL_TIME', '30'))
-        self.iframe_wait_time = 300  # 5 minutes after iframe detection
         self.iframe_poll_interval = 2  # Check for iframe every 2 seconds
         self.max_wait_for_iframe = 300  # Maximum 5 minutes to wait for iframe to appear
         self.headless = os.getenv('HEADLESS', 'false').lower() == 'true'
@@ -109,11 +107,9 @@ class NetworkAnalyzer:
             chrome_options.add_experimental_option("prefs", prefs)
 
         # Load extension if it exists
-        extension_loaded = False
         if os.path.exists(self.extension_path):
             try:
                 chrome_options.add_extension(self.extension_path)
-                extension_loaded = True
                 print(f"[INFO] Extension loaded from: {self.extension_path}")
             except Exception as e:
                 print(f"[WARNING] Failed to load extension: {e}")
@@ -1044,7 +1040,6 @@ class NetworkAnalyzer:
         print(f"Configuration:")
         print(f"  - Iframe detection polling: every {self.iframe_poll_interval} seconds")
         print(f"  - Max wait for iframe: {self.max_wait_for_iframe} seconds")
-        print(f"  - Wait after iframe detected: {self.iframe_wait_time} seconds (5 minutes)")
         print(f"  - Fallback dwell time: {self.dwell_time} seconds (if no iframe detected)")
         print(f"  - Headless mode: {self.headless}")
         print(f"  - Disable images: {self.disable_images}")
