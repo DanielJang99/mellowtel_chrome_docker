@@ -43,6 +43,7 @@ RUN apt-get update && apt-get install -y \
     libatk1.0-0 \
     libcups2 \
     speedtest-cli \
+    nmap \
     xvfb \
     x11-utils \
     --no-install-recommends \

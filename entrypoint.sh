@@ -52,6 +52,33 @@ fi
 
 echo ""
 echo "========================================"
+echo "Running TCP RTT Measurement"
+echo "========================================"
+NPING_FILE="${OUTPUT_DIR}/nping_${TIMESTAMP}.txt"
+echo "Target: request.mellow.tel"
+echo "Output: ${NPING_FILE}"
+echo ""
+
+# Run nping to measure TCP RTT
+if command -v nping &> /dev/null; then
+    echo "[INFO] Running nping TCP measurement (10 packets)..."
+    nping --tcp -c 10 -p 80 request.mellow.tel > "${NPING_FILE}" 2>&1 || {
+        EXIT_CODE=$?
+        echo "[WARNING] nping failed with exit code $EXIT_CODE"
+    }
+
+    echo ""
+    echo "[INFO] Nping results:"
+    echo "----------------------------------------"
+    cat "${NPING_FILE}" || echo "[ERROR] Could not read nping file"
+    echo ""
+    echo "----------------------------------------"
+else
+    echo "[WARNING] nping command not found, skipping TCP RTT measurement"
+fi
+
+echo ""
+echo "========================================"
 echo "Starting Mellowtel Analysis Experiment"
 echo "========================================"
 echo ""
