@@ -6,6 +6,7 @@ Captures all network activity from Chrome browsing with extension installed.
 
 import json
 import os
+import random
 import sys
 import time
 from datetime import datetime
@@ -127,11 +128,16 @@ class NetworkAnalyzer:
         return chrome_options
 
     def load_sites(self) -> List[str]:
-        """Load list of URLs from sites.txt."""
+        """Load list of URLs from sites.txt and randomize their order."""
         try:
             with open(self.sites_file, 'r') as f:
                 sites = [line.strip() for line in f if line.strip() and not line.startswith('#')]
             print(f"[INFO] Loaded {len(sites)} sites from {self.sites_file}")
+
+            # Randomize the order of sites
+            random.shuffle(sites)
+            print(f"[INFO] Randomized site visit order")
+
             return sites
         except FileNotFoundError:
             print(f"[ERROR] Sites file not found: {self.sites_file}")
