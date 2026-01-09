@@ -181,6 +181,45 @@ class NetworkAnalyzer:
             print("  5. Check Docker shared memory (shm_size in docker-compose.yml)")
             sys.exit(1)
 
+    def reinitialize_driver(self, reactivate_extension: bool = False) -> bool:
+        """
+        Reinitialize the Chrome driver after a timeout or crash.
+        Returns True if successful, False otherwise.
+        """
+        try:
+            print("[INFO] Reinitializing Chrome driver...")
+
+            # Quit existing driver if it exists
+            if self.driver:
+                try:
+                    self.driver.quit()
+                    print("[INFO] Closed existing driver")
+                except Exception as e:
+                    print(f"[WARNING] Error closing driver: {e}")
+
+            self.driver = None
+
+            # Reinitialize driver
+            self.initialize_driver()
+
+            # Get extension ID
+            self.get_extension_id()
+
+            # Optionally reactivate extension if it was previously activated
+            if reactivate_extension:
+                print("[INFO] Reactivating extension after reinitialization...")
+                self.activate_extension()
+                self.extension_activated = True
+
+            print("[SUCCESS] Driver reinitialized successfully")
+            return True
+
+        except Exception as e:
+            print(f"[ERROR] Failed to reinitialize driver: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
+
     def get_extension_id(self) -> str:
         """
         Get the extension ID for IdleForest extension.
@@ -196,6 +235,14 @@ class NetworkAnalyzer:
                     self.driver.get("chrome://extensions/")
                     time.sleep(5)
                     break
+                except TimeoutException as e:
+                    print(f"[ERROR] Timeout navigating to extensions page (attempt {ext_attempt + 1}/{max_retries}): {e}")
+                    if ext_attempt < max_retries - 1:
+                        print(f"[INFO] Retrying...")
+                        time.sleep(1)
+                    else:
+                        print(f"[ERROR] Failed to navigate to extensions page after timeout")
+                        raise
                 except RuntimeError as e:
                     if "dictionary changed size during iteration" in str(e):
                         if ext_attempt < max_retries - 1:
@@ -280,6 +327,14 @@ class NetworkAnalyzer:
                         self.driver.get("chrome://extensions/")
                         time.sleep(2)
                         break
+                    except TimeoutException as e:
+                        print(f"[ERROR] Timeout navigating to extensions for enabling (attempt {enable_attempt + 1}/{max_retries}): {e}")
+                        if enable_attempt < max_retries - 1:
+                            print(f"[INFO] Retrying...")
+                            time.sleep(1)
+                        else:
+                            print(f"[ERROR] Failed to navigate to extensions page for enabling after timeout")
+                            raise
                     except RuntimeError as e:
                         if "dictionary changed size during iteration" in str(e):
                             if enable_attempt < max_retries - 1:
@@ -351,6 +406,14 @@ class NetworkAnalyzer:
                     time.sleep(2)
                     print(f"[SUCCESS] Navigated to extension popup: {popup_url}")
                     break  # Success
+                except TimeoutException as e:
+                    print(f"[ERROR] Timeout opening popup (attempt {popup_attempt + 1}/{max_retries}): {e}")
+                    if popup_attempt < max_retries - 1:
+                        print(f"[INFO] Retrying...")
+                        time.sleep(1)
+                    else:
+                        print(f"[ERROR] Failed to open popup after timeout")
+                        raise
                 except RuntimeError as e:
                     if "dictionary changed size during iteration" in str(e):
                         if popup_attempt < max_retries - 1:
@@ -423,6 +486,14 @@ class NetworkAnalyzer:
                             time.sleep(2)
                             print("[INFO] Back on site")
                             break
+                        except TimeoutException as e:
+                            print(f"[ERROR] Timeout navigating back (attempt {back_attempt + 1}/{max_retries}): {e}")
+                            if back_attempt < max_retries - 1:
+                                print(f"[INFO] Retrying...")
+                                time.sleep(1)
+                            else:
+                                print(f"[ERROR] Failed to navigate back after timeout")
+                                raise
                         except RuntimeError as e:
                             if "dictionary changed size during iteration" in str(e):
                                 if back_attempt < max_retries - 1:
@@ -864,46 +935,108 @@ class NetworkAnalyzer:
         """Visit a single site and capture network activity."""
         print(f"\n[{index}/{total}] Visiting: {url}")
 
-        # Close all tabs except one to start fresh
-        self.close_all_tabs_except_one()
-
-        # Clear previous requests and iframe tracking
-        try:
-            del self.driver.requests
-        except RuntimeError as e:
-            # Handle selenium-wire certificate dictionary iteration error
-            print(f"[WARNING] RuntimeError clearing requests (selenium-wire cert bug): {e}")
-            print("[INFO] Continuing anyway - this is a known selenium-wire issue")
-
-        self.mellowtel_iframe_urls.clear()
-        self.mellowtel_domains.clear()
-        self.iframe_metadata.clear()
-        self.iframe_requests.clear()
-        self.current_visible_iframes.clear()
-        self.last_processed_request_index = 0
-
-        max_retries = 3
-        for nav_attempt in range(max_retries):
+        # Timeout retry loop - reinitialize driver on timeout
+        max_timeout_retries = 2
+        for timeout_attempt in range(max_timeout_retries + 1):
             try:
-                # Navigate to the URL
-                self.driver.get(url)
-                print(f"[INFO] Page loaded.")
-                break  # Success, exit retry loop
+                # Track if we need to reactivate extension after reinitialization
+                need_reactivation = self.extension_activated
 
-            except RuntimeError as e:
-                # Handle selenium-wire certificate dictionary iteration error
-                if "dictionary changed size during iteration" in str(e):
-                    if nav_attempt < max_retries - 1:
-                        print(f"[WARNING] RuntimeError during navigation (selenium-wire cert bug) on attempt {nav_attempt + 1}/{max_retries}: {e}")
-                        print(f"[INFO] Retrying navigation...")
-                        time.sleep(0.5)
-                    else:
-                        print(f"[ERROR] Failed to navigate after {max_retries} attempts")
+                # If this is a retry attempt, reinitialize the driver
+                if timeout_attempt > 0:
+                    print(f"[INFO] Timeout retry attempt {timeout_attempt + 1}/{max_timeout_retries + 1} for {url}")
+                    if not self.reinitialize_driver(reactivate_extension=need_reactivation):
+                        print(f"[ERROR] Failed to reinitialize driver on attempt {timeout_attempt + 1}")
+                        if timeout_attempt < max_timeout_retries:
+                            continue
+                        else:
+                            print(f"[ERROR] Skipping site {url} after {max_timeout_retries + 1} failed attempts")
+                            return
+
+                # Close all tabs except one to start fresh
+                self.close_all_tabs_except_one()
+
+                # Clear previous requests and iframe tracking
+                try:
+                    del self.driver.requests
+                except RuntimeError as e:
+                    # Handle selenium-wire certificate dictionary iteration error
+                    print(f"[WARNING] RuntimeError clearing requests (selenium-wire cert bug): {e}")
+                    print("[INFO] Continuing anyway - this is a known selenium-wire issue")
+
+                self.mellowtel_iframe_urls.clear()
+                self.mellowtel_domains.clear()
+                self.iframe_metadata.clear()
+                self.iframe_requests.clear()
+                self.current_visible_iframes.clear()
+                self.last_processed_request_index = 0
+
+                # Navigation with RuntimeError retry logic
+                max_retries = 3
+                nav_success = False
+                for nav_attempt in range(max_retries):
+                    try:
+                        # Navigate to the URL
+                        self.driver.get(url)
+                        print(f"[INFO] Page loaded.")
+                        nav_success = True
+                        break  # Success, exit retry loop
+
+                    except RuntimeError as e:
+                        # Handle selenium-wire certificate dictionary iteration error
+                        if "dictionary changed size during iteration" in str(e):
+                            if nav_attempt < max_retries - 1:
+                                print(f"[WARNING] RuntimeError during navigation (selenium-wire cert bug) on attempt {nav_attempt + 1}/{max_retries}: {e}")
+                                print(f"[INFO] Retrying navigation...")
+                                time.sleep(0.5)
+                            else:
+                                print(f"[ERROR] Failed to navigate after {max_retries} attempts")
+                                raise
+                        else:
+                            # Re-raise if it's a different RuntimeError
+                            raise
+                    except TimeoutException:
+                        # Re-raise TimeoutException to be caught by outer loop
                         raise
-                else:
-                    # Re-raise if it's a different RuntimeError
-                    raise
 
+                if not nav_success:
+                    print(f"[ERROR] Failed to navigate to {url}")
+                    return
+
+                # Continue with the rest of the site visit logic
+                self._process_site_after_navigation(url)
+
+                # If we got here, the site visit was successful
+                print(f"[SUCCESS] Successfully completed visit to {url}")
+                return
+
+            except TimeoutException as e:
+                print(f"[ERROR] Timeout visiting {url} (attempt {timeout_attempt + 1}/{max_timeout_retries + 1}): {e}")
+                if timeout_attempt < max_timeout_retries:
+                    print(f"[INFO] Will reinitialize driver and retry...")
+                else:
+                    print(f"[ERROR] All retry attempts exhausted for {url}. Skipping site.")
+                    # Try to save whatever data we have
+                    try:
+                        self.process_new_requests(url)
+                        self.write_all_remaining_requests()
+                        self.save_iframe_metadata(url)
+                    except:
+                        pass
+                    return
+            except Exception as e:
+                print(f"[ERROR] Unexpected error visiting {url}: {e}")
+                # Try to save whatever data we have
+                try:
+                    self.process_new_requests(url)
+                    self.write_all_remaining_requests()
+                    self.save_iframe_metadata(url)
+                except:
+                    pass
+                return
+
+    def _process_site_after_navigation(self, url: str):
+        """Process site after successful navigation. Extracted from visit_site for clarity."""
         try:
             # Set monitoring start time
             self.monitoring_start_time = time.time()
@@ -1008,13 +1141,11 @@ class NetworkAnalyzer:
             self.save_iframe_metadata(url)
 
         except TimeoutException:
-            print(f"[WARNING] Timeout loading {url} - continuing...")
-            # Process and write remaining requests
-            self.process_new_requests(url)
-            self.write_all_remaining_requests()
-            self.save_iframe_metadata(url)
+            # Re-raise TimeoutException to be handled by outer retry loop in visit_site()
+            print(f"[WARNING] Timeout during site monitoring - will retry with driver reinitialization")
+            raise
         except Exception as e:
-            print(f"[ERROR] Error visiting {url}: {e}")
+            print(f"[ERROR] Error during site monitoring {url}: {e}")
             # Try to save whatever data we have
             try:
                 self.process_new_requests(url)
@@ -1022,6 +1153,8 @@ class NetworkAnalyzer:
                 self.save_iframe_metadata(url)
             except:
                 pass
+            # Re-raise to be handled by visit_site()
+            raise
 
     def move_speedtest_file(self):
         """Move speedtest JSON file from output/ to run directory if it exists."""
@@ -1079,11 +1212,48 @@ class NetworkAnalyzer:
         # Move speedtest file into run directory if it exists
         self.move_speedtest_file()
 
-        # Initialize driver
-        self.initialize_driver()
+        # Initialize driver with retry logic for TimeoutException
+        max_init_retries = 2
+        init_success = False
 
-        # Get extension ID for activation
-        self.get_extension_id()
+        for init_attempt in range(max_init_retries + 1):
+            try:
+                if init_attempt == 0:
+                    # First attempt - normal initialization
+                    print("[INFO] Initializing Chrome driver...")
+                    self.initialize_driver()
+                    self.get_extension_id()
+                else:
+                    # Retry attempt - full reinitialization
+                    print(f"[INFO] Initialization attempt {init_attempt + 1}/{max_init_retries + 1} after timeout")
+                    if not self.reinitialize_driver(reactivate_extension=False):
+                        print(f"[ERROR] Reinitialization failed on attempt {init_attempt + 1}")
+                        continue
+
+                init_success = True
+                print("[SUCCESS] Driver initialization completed")
+                break
+
+            except TimeoutException as e:
+                print(f"[ERROR] Timeout during initialization (attempt {init_attempt + 1}/{max_init_retries + 1}): {e}")
+                if init_attempt < max_init_retries:
+                    print(f"[INFO] Retrying initialization...")
+                else:
+                    print(f"[ERROR] All initialization attempts exhausted. Cannot continue.")
+                    sys.exit(1)
+            except Exception as e:
+                print(f"[ERROR] Unexpected error during initialization: {e}")
+                import traceback
+                traceback.print_exc()
+                if init_attempt < max_init_retries:
+                    print(f"[INFO] Retrying initialization...")
+                else:
+                    print(f"[ERROR] All initialization attempts exhausted. Cannot continue.")
+                    sys.exit(1)
+
+        if not init_success:
+            print("[ERROR] Failed to initialize driver after all retries")
+            sys.exit(1)
 
         # Track experiment start time for 55-minute timeout
         experiment_start_time = time.time()
