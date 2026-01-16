@@ -38,7 +38,7 @@ fi
 
 # Run docker-compose
 echo "$(date): Starting new container..." >> "$LOG_FILE"
-sudo docker-compose up >> "$LOG_FILE" 2>&1
+sudo ENABLE_TC=$ENABLE_TC docker-compose up >> "$LOG_FILE" 2>&1
 EXIT_CODE=$?
 
 # Clean up
