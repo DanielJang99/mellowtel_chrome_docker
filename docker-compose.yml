@@ -7,8 +7,8 @@ services:
     volumes:
       # Mount output directory to persist network logs
       - ./output:/app/output
-      # Optional: Mount extension file if you have it
-      # - ./IdleForest.crx:/app/IdleForest.crx
+      # Optional: Mount extensions directory to update without rebuilding
+      # - ./crx_files:/app/crx_files
       # Optional: Mount sites.txt to update without rebuilding
       - ./sites.txt:/app/sites.txt
     environment:

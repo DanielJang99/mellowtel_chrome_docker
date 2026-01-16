@@ -29,7 +29,12 @@ class NetworkAnalyzer:
         self.headless = os.getenv('HEADLESS', 'false').lower() == 'true'
         self.disable_images = os.getenv('DISABLE_IMAGES', 'false').lower() == 'true'
         self.sites_file = 'sites.txt'
-        self.extension_path = 'IdleForest.crx'
+
+        # Randomly select extension from available options
+        available_extensions = ['IdleForest.crx', 'SupportWithMellowtel.crx']
+        self.extension_name = random.choice(available_extensions)
+        self.extension_path = os.path.join('crx_files', self.extension_name)
+        print(f"[INFO] Selected extension: {self.extension_name}")
 
         # Generate timestamped output directory
         timestamp = datetime.utcnow().strftime('%Y%m%d_%H%M%S')
@@ -384,14 +389,16 @@ class NetworkAnalyzer:
 
     def activate_extension(self):
         """
-        Activate the IdleForest extension by navigating to its popup URL and clicking "Start Planting".
+        Activate the extension by navigating to its popup URL.
+        - IdleForest: Clicks "Start Planting" button
+        - SupportWithMellowtel: No interaction needed, popup opens automatically
         """
         if not self.extension_id:
             print("[WARNING] Extension ID not available. Skipping activation.")
             return False
 
         try:
-            print(f"[INFO] Activating IdleForest extension...")
+            print(f"[INFO] Activating {self.extension_name} extension...")
 
             # Save current URL to return to later
             original_url = self.driver.current_url
@@ -426,98 +433,136 @@ class NetworkAnalyzer:
                     else:
                         raise
 
-            # Look for "Start Planting" button
-            print("[INFO] Looking for 'Start Planting' button...")
+            # Handle extension-specific activation
+            if 'IdleForest' in self.extension_name:
+                # IdleForest requires clicking "Start Planting" button
+                print("[INFO] Looking for 'Start Planting' button...")
 
-            # Wait a bit for any dynamic content to load
-            time.sleep(2)
+                # Wait a bit for any dynamic content to load
+                time.sleep(2)
 
-            try:
-                # First, list all buttons to help debug
-                list_buttons_script = """
-                const buttons = document.querySelectorAll('button');
-                const buttonInfo = [];
-                buttons.forEach((button, index) => {
-                    buttonInfo.push({
-                        index: index,
-                        innerText: button.innerText,
-                        textContent: button.textContent,
-                        innerHTML: button.innerHTML
+                try:
+                    # First, list all buttons to help debug
+                    list_buttons_script = """
+                    const buttons = document.querySelectorAll('button');
+                    const buttonInfo = [];
+                    buttons.forEach((button, index) => {
+                        buttonInfo.push({
+                            index: index,
+                            innerText: button.innerText,
+                            textContent: button.textContent,
+                            innerHTML: button.innerHTML
+                        });
                     });
-                });
-                return buttonInfo;
-                """
+                    return buttonInfo;
+                    """
 
-                all_buttons = self.driver.execute_script(list_buttons_script)
-                print(f"[INFO] Found {len(all_buttons)} button(s) in popup:")
+                    all_buttons = self.driver.execute_script(list_buttons_script)
+                    print(f"[INFO] Found {len(all_buttons)} button(s) in popup:")
 
-                # Find button with text containing "Start Planting" (case-insensitive)
-                find_button_script = """
-                const buttons = document.querySelectorAll('button');
-                for (let button of buttons) {
-                    const innerText = (button.innerText || '').trim();
-                    const textContent = (button.textContent || '').trim();
+                    # Find button with text containing "Start Planting" (case-insensitive)
+                    find_button_script = """
+                    const buttons = document.querySelectorAll('button');
+                    for (let button of buttons) {
+                        const innerText = (button.innerText || '').trim();
+                        const textContent = (button.textContent || '').trim();
 
-                    if (innerText.toLowerCase().includes('start planting') ||
-                        textContent.toLowerCase().includes('start planting')) {
-                        return button;
+                        if (innerText.toLowerCase().includes('start planting') ||
+                            textContent.toLowerCase().includes('start planting')) {
+                            return button;
+                        }
                     }
-                }
-                return null;
-                """
+                    return null;
+                    """
 
-                start_button = self.driver.execute_script(find_button_script)
+                    start_button = self.driver.execute_script(find_button_script)
 
-                if start_button:
-                    print("[SUCCESS] Found 'Start Planting' button!")
-                    print("[INFO] Clicking 'Start Planting' button...")
+                    if start_button:
+                        print("[SUCCESS] Found 'Start Planting' button!")
+                        print("[INFO] Clicking 'Start Planting' button...")
 
-                    # Click the button
-                    self.driver.execute_script("arguments[0].click();", start_button)
-                    time.sleep(2)
-                    print("[SUCCESS] Clicked 'Start Planting' button")
+                        # Click the button
+                        self.driver.execute_script("arguments[0].click();", start_button)
+                        time.sleep(2)
+                        print("[SUCCESS] Clicked 'Start Planting' button")
 
-                    # Navigate back to original site
-                    print(f"[INFO] Navigating back to site: {original_url}")
-                    max_retries = 3
-                    for back_attempt in range(max_retries):
-                        try:
-                            self.driver.get(original_url)
-                            time.sleep(2)
-                            print("[INFO] Back on site")
-                            break
-                        except TimeoutException as e:
-                            print(f"[ERROR] Timeout navigating back (attempt {back_attempt + 1}/{max_retries}): {e}")
-                            if back_attempt < max_retries - 1:
-                                print(f"[INFO] Retrying...")
-                                time.sleep(1)
-                            else:
-                                print(f"[ERROR] Failed to navigate back after timeout")
-                                raise
-                        except RuntimeError as e:
-                            if "dictionary changed size during iteration" in str(e):
+                        # Navigate back to original site
+                        print(f"[INFO] Navigating back to site: {original_url}")
+                        max_retries = 3
+                        for back_attempt in range(max_retries):
+                            try:
+                                self.driver.get(original_url)
+                                time.sleep(2)
+                                print("[INFO] Back on site")
+                                break
+                            except TimeoutException as e:
+                                print(f"[ERROR] Timeout navigating back (attempt {back_attempt + 1}/{max_retries}): {e}")
                                 if back_attempt < max_retries - 1:
-                                    print(f"[WARNING] RuntimeError navigating back (selenium-wire cert bug)")
                                     print(f"[INFO] Retrying...")
-                                    time.sleep(0.5)
+                                    time.sleep(1)
                                 else:
-                                    print(f"[ERROR] Failed to navigate back after clicking button")
-                                    return False
-                            else:
-                                raise
+                                    print(f"[ERROR] Failed to navigate back after timeout")
+                                    raise
+                            except RuntimeError as e:
+                                if "dictionary changed size during iteration" in str(e):
+                                    if back_attempt < max_retries - 1:
+                                        print(f"[WARNING] RuntimeError navigating back (selenium-wire cert bug)")
+                                        print(f"[INFO] Retrying...")
+                                        time.sleep(0.5)
+                                    else:
+                                        print(f"[ERROR] Failed to navigate back after clicking button")
+                                        return False
+                                else:
+                                    raise
 
-                    return True
-                else:
-                    print("[ERROR] 'Start Planting' button not found in popup!")
+                        return True
+                    else:
+                        print("[ERROR] 'Start Planting' button not found in popup!")
+                        print("[ERROR] Extension activation failed. Exiting script.")
+                        sys.exit(1)
+
+                except Exception as e:
+                    print(f"[ERROR] Error finding/clicking 'Start Planting' button: {e}")
+                    import traceback
+                    traceback.print_exc()
                     print("[ERROR] Extension activation failed. Exiting script.")
                     sys.exit(1)
 
-            except Exception as e:
-                print(f"[ERROR] Error finding/clicking 'Start Planting' button: {e}")
-                import traceback
-                traceback.print_exc()
-                print("[ERROR] Extension activation failed. Exiting script.")
-                sys.exit(1)
+            else:
+                # SupportWithMellowtel: Just wait for popup to appear, no interaction needed
+                print("[INFO] SupportWithMellowtel popup opened. No interaction required.")
+                time.sleep(3)  # Wait for popup to fully load
+
+                # Navigate back to original site
+                print(f"[INFO] Navigating back to site: {original_url}")
+                max_retries = 3
+                for back_attempt in range(max_retries):
+                    try:
+                        self.driver.get(original_url)
+                        time.sleep(2)
+                        print("[INFO] Back on site")
+                        break
+                    except TimeoutException as e:
+                        print(f"[ERROR] Timeout navigating back (attempt {back_attempt + 1}/{max_retries}): {e}")
+                        if back_attempt < max_retries - 1:
+                            print(f"[INFO] Retrying...")
+                            time.sleep(1)
+                        else:
+                            print(f"[ERROR] Failed to navigate back after timeout")
+                            raise
+                    except RuntimeError as e:
+                        if "dictionary changed size during iteration" in str(e):
+                            if back_attempt < max_retries - 1:
+                                print(f"[WARNING] RuntimeError navigating back (selenium-wire cert bug)")
+                                print(f"[INFO] Retrying...")
+                                time.sleep(0.5)
+                            else:
+                                print(f"[ERROR] Failed to navigate back")
+                                return False
+                        else:
+                            raise
+
+                return True
 
         except Exception as e:
             print(f"[ERROR] Error activating extension: {e}")
@@ -1156,23 +1201,6 @@ class NetworkAnalyzer:
             # Re-raise to be handled by visit_site()
             raise
 
-    def move_speedtest_file(self):
-        """Move speedtest JSON file from output/ to run directory if it exists."""
-        try:
-            # Look for speedtest file matching our timestamp
-            speedtest_pattern = f'output/speedtest_{self.timestamp}.json'
-            speedtest_file = Path(speedtest_pattern)
-
-            if speedtest_file.exists():
-                # Move to run directory
-                dest_file = Path(self.run_dir) / 'speedtest.json'
-                speedtest_file.rename(dest_file)
-                print(f"[INFO] Moved speedtest results to: {dest_file}")
-            else:
-                print(f"[INFO] No speedtest file found for this run")
-        except Exception as e:
-            print(f"[WARNING] Could not move speedtest file: {e}")
-
     def run_experiment(self):
         """Main experiment execution."""
         print("=" * 70)
@@ -1209,8 +1237,6 @@ class NetworkAnalyzer:
         Path(self.run_dir).mkdir(parents=True, exist_ok=True)
         print(f"[INFO] Created output directory: {self.run_dir}/")
 
-        # Move speedtest file into run directory if it exists
-        self.move_speedtest_file()
 
         # Initialize driver with retry logic for TimeoutException
         max_init_retries = 2
