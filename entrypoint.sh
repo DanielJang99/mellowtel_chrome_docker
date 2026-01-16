@@ -2,6 +2,37 @@
 set -e
 
 echo "========================================"
+echo "Determining Client Network Information"
+echo "========================================"
+# Fetch public IP information and extract ASN and City
+IP_INFO=$(curl -s --max-time 10 http://ip-api.com/json/ 2>/dev/null || echo "")
+
+if [ -n "$IP_INFO" ] && echo "$IP_INFO" | grep -q "\"status\":\"success\""; then
+    # Extract ASN (format: "AS15169 Google LLC" -> "AS15169")
+    ASN=$(echo "$IP_INFO" | grep -o '"as":"[^"]*"' | cut -d'"' -f4 | awk '{print $1}')
+    # Extract City
+    CITY=$(echo "$IP_INFO" | grep -o '"city":"[^"]*"' | cut -d'"' -f4)
+
+    # Replace spaces with underscores in city name
+    CITY=$(echo "$CITY" | sed 's/ /_/g')
+
+    # Set client_network variable
+    if [ -n "$ASN" ] && [ -n "$CITY" ]; then
+        client_network="${ASN}-${CITY}"
+        echo "[INFO] Client Network: ${client_network}"
+    else
+        client_network="unknown"
+        echo "[WARNING] Could not determine ASN or City, using 'unknown'"
+    fi
+else
+    client_network="unknown"
+    echo "[WARNING] Could not fetch IP information, using 'unknown'"
+fi
+
+export client_network
+echo ""
+
+echo "========================================"
 echo "Starting Xvfb Virtual Display"
 echo "========================================"
 export DISPLAY=:99
