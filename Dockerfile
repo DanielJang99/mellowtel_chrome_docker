@@ -79,7 +79,7 @@ COPY run_experiment.py .
 COPY diagnose.py .
 COPY test_minimal.py .
 COPY sites.txt .
-COPY IdleForest.crx .
+COPY crx_files/ ./crx_files/
 COPY entrypoint.sh .
 
 # Make entrypoint script executable
