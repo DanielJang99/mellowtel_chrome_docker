@@ -46,6 +46,8 @@ RUN apt-get update && apt-get install -y \
     nmap \
     xvfb \
     x11-utils \
+    iproute2 \
+    iptables \
     --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 

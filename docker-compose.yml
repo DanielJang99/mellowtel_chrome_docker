@@ -17,6 +17,9 @@ services:
       - HEADLESS=false  # false = Xvfb (normal Chrome UA), true = headless (HeadlessChrome UA)
       - DISABLE_IMAGES=false  # Set to true to disable image loading for faster execution
       - DISPLAY=:99  # Virtual display provided by Xvfb
+      - ENABLE_TC=${ENABLE_TC:-false}  # Enable traffic control latency simulation
     shm_size: 3gb  # Increase shared memory size for Chrome
     security_opt:
       - seccomp:unconfined  # Required for Chrome sandbox in some environments
+    cap_add:
+      - NET_ADMIN  # Required for tc and iptables network latency simulation

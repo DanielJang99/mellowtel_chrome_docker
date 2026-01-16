@@ -1,10 +1,18 @@
 #!/bin/bash
 
 # Set variables
-PROJECT_DIR="/home/ec2-user/mellowtel_chrome_docker"
+PROJECT_DIR="$(pwd)"
 mkdir -p "$PROJECT_DIR/logs"
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 LOG_FILE="$PROJECT_DIR/logs/mellowtel_cron_${TIMESTAMP}.log"
+
+# Parse command-line arguments
+if [ "$1" = "-tc" ]; then
+    export ENABLE_TC=true
+    echo "$(date): Traffic control latency simulation ENABLED" >> "$LOG_FILE"
+else
+    export ENABLE_TC=false
+fi
 
 # Log start
 echo "========================================" >> "$LOG_FILE"
@@ -22,7 +30,7 @@ RUNNING_CONTAINERS=$(sudo docker ps -q)
 if [ -n "$RUNNING_CONTAINERS" ]; then
     echo "$(date): Found running containers, stopping them..." >> "$LOG_FILE"
     sudo docker-compose down >> "$LOG_FILE" 2>&1
-    sudo docker kill $(sudo docker ps -q) >> "$LOG_FILE" 2>&1
+    sudo docker kill $RUNNING_CONTAINERS >> "$LOG_FILE" 2>&1
     echo "$(date): Containers stopped" >> "$LOG_FILE"
 else
     echo "$(date): No existing containers found" >> "$LOG_FILE"

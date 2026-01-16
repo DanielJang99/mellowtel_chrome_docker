@@ -83,6 +83,60 @@ fi
 
 echo ""
 echo "========================================"
+echo "Applying Network Latency Conditions"
+echo "========================================"
+
+if [ "${ENABLE_TC}" = "true" ]; then
+    # Randomly select latency: 0=none, 1=100ms, 2=200ms
+    LATENCY_CHOICE=$((RANDOM % 3))
+
+    case $LATENCY_CHOICE in
+        0)
+            LATENCY="none"
+            echo "[INFO] Network latency condition: none (no additional latency)"
+            ;;
+        1)
+            LATENCY="100ms"
+            echo "[INFO] Network latency condition: 100ms"
+            ;;
+        2)
+            LATENCY="200ms"
+            echo "[INFO] Network latency condition: 200ms"
+            ;;
+    esac
+
+    # Apply latency if not "none"
+    if [ "$LATENCY" != "none" ]; then
+        echo "[INFO] Configuring traffic control for Mellowtel servers..."
+
+        # Resolve Mellowtel domain to IP addresses
+        MELLOWTEL_IPS=$(getent ahosts request.mellow.tel | awk '{print $1}' | sort -u)
+
+        if [ -z "$MELLOWTEL_IPS" ]; then
+            echo "[WARNING] Could not resolve request.mellow.tel, skipping latency configuration"
+        else
+            echo "[INFO] Mellowtel IPs: $MELLOWTEL_IPS"
+
+            # Setup tc qdisc on eth0
+            tc qdisc add dev eth0 root handle 1: prio
+            tc qdisc add dev eth0 parent 1:3 handle 30: netem delay $LATENCY
+            tc filter add dev eth0 protocol ip parent 1:0 prio 3 handle 1 fw flowid 1:3
+
+            # Mark packets destined for Mellowtel IPs
+            for IP in $MELLOWTEL_IPS; do
+                iptables -t mangle -A OUTPUT -d $IP -j MARK --set-mark 1
+                echo "[INFO] Marked traffic to $IP for ${LATENCY} latency"
+            done
+
+            echo "[INFO] Traffic control configured successfully"
+        fi
+    fi
+else
+    echo "[INFO] Traffic control disabled (ENABLE_TC not set)"
+fi
+
+echo ""
+echo "========================================"
 echo "Running TCP RTT Measurement"
 echo "========================================"
 NPING_FILE="${OUTPUT_DIR}/nping_${TIMESTAMP}.txt"
