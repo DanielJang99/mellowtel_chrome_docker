@@ -5,9 +5,13 @@ Captures all network activity from Chrome browsing with extension installed.
 """
 
 import json
+import logging
+import logging.handlers
 import os
+import queue
 import random
 import sys
+import threading
 import time
 from datetime import datetime
 from pathlib import Path
@@ -19,10 +23,96 @@ from selenium.webdriver.chrome.options import Options
 from selenium.common.exceptions import WebDriverException, TimeoutException
 
 
+# Setup async logging with QueueHandler to prevent I/O blocking
+log_queue = queue.Queue(-1)  # Unlimited size
+queue_handler = logging.handlers.QueueHandler(log_queue)
+
+# Configure root logger
+logger = logging.getLogger()
+logger.setLevel(logging.INFO)
+logger.addHandler(queue_handler)
+
+# Setup console handler for the queue listener
+console_handler = logging.StreamHandler(sys.stdout)
+console_handler.setLevel(logging.INFO)
+formatter = logging.Formatter('[%(levelname)s] %(message)s')
+console_handler.setFormatter(formatter)
+
+# Start queue listener in background thread
+queue_listener = logging.handlers.QueueListener(log_queue, console_handler, respect_handler_level=True)
+queue_listener.start()
+
+
+class FileWriterQueue:
+    """Thread-safe queue for async file writes to prevent I/O blocking."""
+
+    def __init__(self):
+        self.write_queue = queue.Queue()
+        self.worker_thread = threading.Thread(target=self._worker, daemon=False)
+        self.shutdown_event = threading.Event()
+        self.worker_thread.start()
+        logger.info("FileWriterQueue worker thread started")
+
+    def _worker(self):
+        """Background worker that processes write tasks from the queue."""
+        while not self.shutdown_event.is_set() or not self.write_queue.empty():
+            try:
+                task = self.write_queue.get(timeout=0.1)
+                if task is None:  # Shutdown signal
+                    break
+
+                # Execute the write task
+                filepath, content, mode = task
+                try:
+                    Path(filepath).parent.mkdir(parents=True, exist_ok=True)
+                    with open(filepath, mode) as f:
+                        f.write(content)
+                except Exception as e:
+                    logger.error(f"Failed to write to {filepath}: {e}")
+                finally:
+                    self.write_queue.task_done()
+
+            except queue.Empty:
+                continue
+            except Exception as e:
+                logger.error(f"Error in FileWriterQueue worker: {e}")
+
+    def enqueue_write(self, filepath: str, content: str, mode: str = 'a'):
+        """Enqueue a file write operation."""
+        self.write_queue.put((filepath, content, mode))
+
+    def shutdown(self, timeout: float = 30.0):
+        """Shutdown the worker thread and wait for queue to drain."""
+        logger.info(f"Shutting down FileWriterQueue (queue size: {self.write_queue.qsize()})...")
+
+        # Signal shutdown
+        self.shutdown_event.set()
+
+        # Wait for queue to drain
+        try:
+            self.write_queue.join()
+            logger.info("FileWriterQueue drained successfully")
+        except Exception as e:
+            logger.warning(f"Error draining queue: {e}")
+
+        # Send termination signal
+        self.write_queue.put(None)
+
+        # Wait for worker thread
+        self.worker_thread.join(timeout=timeout)
+        if self.worker_thread.is_alive():
+            logger.warning("FileWriterQueue worker thread did not terminate in time")
+        else:
+            logger.info("FileWriterQueue worker thread terminated")
+
+
 class NetworkAnalyzer:
     """Main class for running the network analysis experiment."""
 
     def __init__(self):
+        # Initialize async file writer queue
+        self.file_writer = FileWriterQueue()
+
         self.dwell_time = int(os.getenv('DWELL_TIME', '30'))
         self.iframe_poll_interval = 2  # Check for iframe every 2 seconds
         self.max_wait_for_iframe = 300  # Maximum 5 minutes to wait for iframe to appear
@@ -34,7 +124,7 @@ class NetworkAnalyzer:
         available_extensions = ['IdleForest.crx', 'SupportWithMellowtel.crx']
         self.extension_name = random.choice(available_extensions)
         self.extension_path = os.path.join('crx_files', self.extension_name)
-        print(f"[INFO] Selected extension: {self.extension_name}")
+        logger.info(f"Selected extension: {self.extension_name}")
 
         # Generate timestamped output directory
         timestamp = datetime.utcnow().strftime('%Y%m%d_%H%M%S')
@@ -74,9 +164,9 @@ class NetworkAnalyzer:
         # Headless mode (only use if explicitly enabled, Xvfb is preferred to avoid HeadlessChrome user agent)
         if self.headless:
             chrome_options.add_argument('--headless')
-            print("[INFO] Using headless mode (User-Agent will show 'HeadlessChrome')")
+            logger.info("Using headless mode (User-Agent will show 'HeadlessChrome')")
         else:
-            print("[INFO] Using Xvfb virtual display (User-Agent will show normal 'Chrome')")
+            logger.info("Using Xvfb virtual display (User-Agent will show normal 'Chrome')")
 
         # Remote debugging (helps with stability)
         chrome_options.add_argument('--remote-debugging-port=9222')
@@ -88,7 +178,7 @@ class NetworkAnalyzer:
         import tempfile
         user_data_dir = tempfile.mkdtemp(prefix='chrome_profile_')
         chrome_options.add_argument(f'--user-data-dir={user_data_dir}')
-        print(f"[INFO] Using user data directory: {user_data_dir}")
+        logger.info(f"Using user data directory: {user_data_dir}")
 
         # Disable automation detection
         chrome_options.add_argument('--disable-blink-features=AutomationControlled')
@@ -118,13 +208,13 @@ class NetworkAnalyzer:
         if os.path.exists(self.extension_path):
             try:
                 chrome_options.add_extension(self.extension_path)
-                print(f"[INFO] Extension loaded from: {self.extension_path}")
+                logger.info(f"Extension loaded from: {self.extension_path}")
             except Exception as e:
-                print(f"[WARNING] Failed to load extension: {e}")
-                print("[WARNING] Continuing without extension.")
+                logger.warning(f"Failed to load extension: {e}")
+                logger.warning("Continuing without extension.")
         else:
-            print(f"[WARNING] Extension file not found: {self.extension_path}")
-            print("[WARNING] Continuing without extension. Network capture will only include page requests.")
+            logger.warning(f"Extension file not found: {self.extension_path}")
+            logger.warning("Continuing without extension. Network capture will only include page requests.")
 
         # Logging for debugging
         chrome_options.add_argument('--enable-logging')
@@ -137,29 +227,29 @@ class NetworkAnalyzer:
         try:
             with open(self.sites_file, 'r') as f:
                 sites = [line.strip() for line in f if line.strip() and not line.startswith('#')]
-            print(f"[INFO] Loaded {len(sites)} sites from {self.sites_file}")
+            logger.info(f"Loaded {len(sites)} sites from {self.sites_file}")
 
             # Randomize the order of sites
             random.shuffle(sites)
-            print(f"[INFO] Randomized site visit order")
+            logger.info(f"Randomized site visit order")
 
             return sites
         except FileNotFoundError:
-            print(f"[ERROR] Sites file not found: {self.sites_file}")
+            logger.error(f"Sites file not found: {self.sites_file}")
             sys.exit(1)
 
     def initialize_driver(self):
         """Initialize the Selenium WebDriver with selenium-wire."""
-        print("[INFO] Initializing Chrome WebDriver...")
+        logger.info("Initializing Chrome WebDriver...")
 
         # Check Chrome version
         try:
             import subprocess
             chrome_version = subprocess.check_output(['google-chrome', '--version'],
                                                      stderr=subprocess.STDOUT).decode().strip()
-            print(f"[INFO] {chrome_version}")
+            logger.info(f"{chrome_version}")
         except Exception as e:
-            print(f"[WARNING] Could not determine Chrome version: {e}")
+            logger.warning(f"Could not determine Chrome version: {e}")
 
         chrome_options = self.setup_chrome_options()
 
@@ -169,21 +259,21 @@ class NetworkAnalyzer:
         }
 
         try:
-            print("[INFO] Starting Chrome with selenium-wire...")
+            logger.info("Starting Chrome with selenium-wire...")
             self.driver = webdriver.Chrome(
                 options=chrome_options,
                 seleniumwire_options=seleniumwire_options
             )
             self.driver.set_page_load_timeout(60)
-            print("[INFO] WebDriver initialized successfully")
+            logger.info("WebDriver initialized successfully")
         except WebDriverException as e:
-            print(f"[ERROR] Failed to initialize WebDriver: {e}")
-            print("\n[DEBUG] Troubleshooting tips:")
-            print("  1. Check Chrome is installed: google-chrome --version")
-            print("  2. Check ChromeDriver is installed: chromedriver --version")
-            print("  3. Ensure versions match")
-            print("  4. Try running with HEADLESS=true")
-            print("  5. Check Docker shared memory (shm_size in docker-compose.yml)")
+            logger.error(f"Failed to initialize WebDriver: {e}")
+            logger.debug("\n[DEBUG]Troubleshooting tips:")
+            logger.debug("  1. Check Chrome is installed: google-chrome --version")
+            logger.debug("  2. Check ChromeDriver is installed: chromedriver --version")
+            logger.debug("  3. Ensure versions match")
+            logger.debug("  4. Try running with HEADLESS=true")
+            logger.debug("  5. Check Docker shared memory (shm_size in docker-compose.yml)")
             sys.exit(1)
 
     def reinitialize_driver(self, reactivate_extension: bool = False) -> bool:
@@ -192,15 +282,15 @@ class NetworkAnalyzer:
         Returns True if successful, False otherwise.
         """
         try:
-            print("[INFO] Reinitializing Chrome driver...")
+            logger.info("Reinitializing Chrome driver...")
 
             # Quit existing driver if it exists
             if self.driver:
                 try:
                     self.driver.quit()
-                    print("[INFO] Closed existing driver")
+                    logger.info("Closed existing driver")
                 except Exception as e:
-                    print(f"[WARNING] Error closing driver: {e}")
+                    logger.warning(f"Error closing driver: {e}")
 
             self.driver = None
 
@@ -212,15 +302,15 @@ class NetworkAnalyzer:
 
             # Optionally reactivate extension if it was previously activated
             if reactivate_extension:
-                print("[INFO] Reactivating extension after reinitialization...")
+                logger.info("Reactivating extension after reinitialization...")
                 self.activate_extension()
                 self.extension_activated = True
 
-            print("[SUCCESS] Driver reinitialized successfully")
+            logger.info("[SUCCESS]Driver reinitialized successfully")
             return True
 
         except Exception as e:
-            print(f"[ERROR] Failed to reinitialize driver: {e}")
+            logger.error(f"Failed to reinitialize driver: {e}")
             import traceback
             traceback.print_exc()
             return False
@@ -231,7 +321,7 @@ class NetworkAnalyzer:
         Returns the extension ID or None if not found.
         """
         try:
-            print("[INFO] Getting extension ID...")
+            logger.info("Getting extension ID...")
 
             # Navigate to chrome://extensions
             max_retries = 3
@@ -241,21 +331,21 @@ class NetworkAnalyzer:
                     time.sleep(5)
                     break
                 except TimeoutException as e:
-                    print(f"[ERROR] Timeout navigating to extensions page (attempt {ext_attempt + 1}/{max_retries}): {e}")
+                    logger.error(f"Timeout navigating to extensions page (attempt {ext_attempt + 1}/{max_retries}): {e}")
                     if ext_attempt < max_retries - 1:
-                        print(f"[INFO] Retrying...")
+                        logger.info(f"Retrying...")
                         time.sleep(1)
                     else:
-                        print(f"[ERROR] Failed to navigate to extensions page after timeout")
+                        logger.error(f"Failed to navigate to extensions page after timeout")
                         raise
                 except RuntimeError as e:
                     if "dictionary changed size during iteration" in str(e):
                         if ext_attempt < max_retries - 1:
-                            print(f"[WARNING] RuntimeError navigating to extensions page (selenium-wire cert bug)")
-                            print(f"[INFO] Retrying...")
+                            logger.warning(f"RuntimeError navigating to extensions page (selenium-wire cert bug)")
+                            logger.info(f"Retrying...")
                             time.sleep(0.5)
                         else:
-                            print(f"[ERROR] Failed to navigate to extensions page")
+                            logger.error(f"Failed to navigate to extensions page")
                             raise
                     else:
                         raise
@@ -289,11 +379,11 @@ class NetworkAnalyzer:
             """
             extensions = self.driver.execute_script(script)
             for ext in extensions:
-                print(f"[INFO] Found extension: {ext['name']} (ID: {ext['id']})")
+                logger.info(f"Found extension: {ext['name']} (ID: {ext['id']})")
                 # Look for IdleForest or Idle Forest
                 if 'idle' in ext['name'].lower() and 'forest' in ext['name'].lower():
                     self.extension_id = ext['id']
-                    print(f"[SUCCESS] Found IdleForest extension ID: {self.extension_id}")
+                    logger.info(f"[SUCCESS]Found IdleForest extension ID: {self.extension_id}")
 
                     # Enable the extension if it's not already enabled
                     self.enable_extension(ext['id'])
@@ -303,18 +393,18 @@ class NetworkAnalyzer:
             # If not found by name, just use the first extension (assuming it's the only one)
             if extensions and len(extensions) > 0:
                 self.extension_id = extensions[0]['id']
-                print(f"[WARNING] Could not find 'IdleForest' by name. Using first extension: {self.extension_id}")
+                logger.warning(f"Could not find 'IdleForest' by name. Using first extension: {self.extension_id}")
 
                 # Enable the extension
                 self.enable_extension(extensions[0]['id'])
 
                 return self.extension_id
 
-            print("[WARNING] No extensions found")
+            logger.warning("No extensions found")
             return None
 
         except Exception as e:
-            print(f"[WARNING] Error getting extension ID: {e}")
+            logger.warning(f"Error getting extension ID: {e}")
             return None
 
     def enable_extension(self, extension_id: str):
@@ -322,7 +412,7 @@ class NetworkAnalyzer:
         Enable the extension via the toggle on chrome://extensions page.
         """
         try:
-            print(f"[INFO] Ensuring extension is enabled...")
+            logger.info(f"Ensuring extension is enabled...")
 
             # Navigate to chrome://extensions if not already there
             if not self.driver.current_url.startswith('chrome://extensions'):
@@ -333,21 +423,21 @@ class NetworkAnalyzer:
                         time.sleep(2)
                         break
                     except TimeoutException as e:
-                        print(f"[ERROR] Timeout navigating to extensions for enabling (attempt {enable_attempt + 1}/{max_retries}): {e}")
+                        logger.error(f"Timeout navigating to extensions for enabling (attempt {enable_attempt + 1}/{max_retries}): {e}")
                         if enable_attempt < max_retries - 1:
-                            print(f"[INFO] Retrying...")
+                            logger.info(f"Retrying...")
                             time.sleep(1)
                         else:
-                            print(f"[ERROR] Failed to navigate to extensions page for enabling after timeout")
+                            logger.error(f"Failed to navigate to extensions page for enabling after timeout")
                             raise
                     except RuntimeError as e:
                         if "dictionary changed size during iteration" in str(e):
                             if enable_attempt < max_retries - 1:
-                                print(f"[WARNING] RuntimeError navigating to extensions (selenium-wire cert bug)")
-                                print(f"[INFO] Retrying...")
+                                logger.warning(f"RuntimeError navigating to extensions (selenium-wire cert bug)")
+                                logger.info(f"Retrying...")
                                 time.sleep(0.5)
                             else:
-                                print(f"[ERROR] Failed to navigate to extensions page for enabling")
+                                logger.error(f"Failed to navigate to extensions page for enabling")
                                 return
                         else:
                             raise
@@ -379,13 +469,13 @@ class NetworkAnalyzer:
             result = self.driver.execute_script(script)
 
             if result == 'success':
-                print(f"[SUCCESS] Extension is now enabled")
+                logger.info(f"[SUCCESS]Extension is now enabled")
                 time.sleep(1)
             else:
-                print(f"[INFO] Extension toggle state: {result}")
+                logger.info(f"Extension toggle state: {result}")
 
         except Exception as e:
-            print(f"[WARNING] Error enabling extension: {e}")
+            logger.warning(f"Error enabling extension: {e}")
 
     def activate_extension(self):
         """
@@ -394,41 +484,41 @@ class NetworkAnalyzer:
         - SupportWithMellowtel: No interaction needed, popup opens automatically
         """
         if not self.extension_id:
-            print("[WARNING] Extension ID not available. Skipping activation.")
+            logger.warning("Extension ID not available. Skipping activation.")
             return False
 
         try:
-            print(f"[INFO] Activating {self.extension_name} extension...")
+            logger.info(f"Activating {self.extension_name} extension...")
 
             # Save current URL to return to later
             original_url = self.driver.current_url
             popup_url = f"chrome-extension://{self.extension_id}/popup.html"
 
             # Open extension popup
-            print(f"[INFO] Opening extension popup...")
+            logger.info(f"Opening extension popup...")
             max_retries = 3
             for popup_attempt in range(max_retries):
                 try:
                     self.driver.get(popup_url)
                     time.sleep(2)
-                    print(f"[SUCCESS] Navigated to extension popup: {popup_url}")
+                    logger.info(f"[SUCCESS]Navigated to extension popup: {popup_url}")
                     break  # Success
                 except TimeoutException as e:
-                    print(f"[ERROR] Timeout opening popup (attempt {popup_attempt + 1}/{max_retries}): {e}")
+                    logger.error(f"Timeout opening popup (attempt {popup_attempt + 1}/{max_retries}): {e}")
                     if popup_attempt < max_retries - 1:
-                        print(f"[INFO] Retrying...")
+                        logger.info(f"Retrying...")
                         time.sleep(1)
                     else:
-                        print(f"[ERROR] Failed to open popup after timeout")
+                        logger.error(f"Failed to open popup after timeout")
                         raise
                 except RuntimeError as e:
                     if "dictionary changed size during iteration" in str(e):
                         if popup_attempt < max_retries - 1:
-                            print(f"[WARNING] RuntimeError opening popup (selenium-wire cert bug) on attempt {popup_attempt + 1}/{max_retries}")
-                            print(f"[INFO] Retrying...")
+                            logger.warning(f"RuntimeError opening popup (selenium-wire cert bug) on attempt {popup_attempt + 1}/{max_retries}")
+                            logger.info(f"Retrying...")
                             time.sleep(0.5)
                         else:
-                            print(f"[ERROR] Failed to open popup after {max_retries} attempts")
+                            logger.error(f"Failed to open popup after {max_retries} attempts")
                             return False
                     else:
                         raise
@@ -436,7 +526,7 @@ class NetworkAnalyzer:
             # Handle extension-specific activation
             if 'IdleForest' in self.extension_name:
                 # IdleForest requires clicking "Start Planting" button
-                print("[INFO] Looking for 'Start Planting' button...")
+                logger.info("Looking for 'Start Planting' button...")
 
                 # Wait a bit for any dynamic content to load
                 time.sleep(2)
@@ -458,7 +548,7 @@ class NetworkAnalyzer:
                     """
 
                     all_buttons = self.driver.execute_script(list_buttons_script)
-                    print(f"[INFO] Found {len(all_buttons)} button(s) in popup:")
+                    logger.info(f"Found {len(all_buttons)} button(s) in popup:")
 
                     # Find button with text containing "Start Planting" (case-insensitive)
                     find_button_script = """
@@ -478,86 +568,86 @@ class NetworkAnalyzer:
                     start_button = self.driver.execute_script(find_button_script)
 
                     if start_button:
-                        print("[SUCCESS] Found 'Start Planting' button!")
-                        print("[INFO] Clicking 'Start Planting' button...")
+                        logger.info("[SUCCESS]Found 'Start Planting' button!")
+                        logger.info("Clicking 'Start Planting' button...")
 
                         # Click the button
                         self.driver.execute_script("arguments[0].click();", start_button)
                         time.sleep(2)
-                        print("[SUCCESS] Clicked 'Start Planting' button")
+                        logger.info("[SUCCESS]Clicked 'Start Planting' button")
 
                         # Navigate back to original site
-                        print(f"[INFO] Navigating back to site: {original_url}")
+                        logger.info(f"Navigating back to site: {original_url}")
                         max_retries = 3
                         for back_attempt in range(max_retries):
                             try:
                                 self.driver.get(original_url)
                                 time.sleep(2)
-                                print("[INFO] Back on site")
+                                logger.info("Back on site")
                                 break
                             except TimeoutException as e:
-                                print(f"[ERROR] Timeout navigating back (attempt {back_attempt + 1}/{max_retries}): {e}")
+                                logger.error(f"Timeout navigating back (attempt {back_attempt + 1}/{max_retries}): {e}")
                                 if back_attempt < max_retries - 1:
-                                    print(f"[INFO] Retrying...")
+                                    logger.info(f"Retrying...")
                                     time.sleep(1)
                                 else:
-                                    print(f"[ERROR] Failed to navigate back after timeout")
+                                    logger.error(f"Failed to navigate back after timeout")
                                     raise
                             except RuntimeError as e:
                                 if "dictionary changed size during iteration" in str(e):
                                     if back_attempt < max_retries - 1:
-                                        print(f"[WARNING] RuntimeError navigating back (selenium-wire cert bug)")
-                                        print(f"[INFO] Retrying...")
+                                        logger.warning(f"RuntimeError navigating back (selenium-wire cert bug)")
+                                        logger.info(f"Retrying...")
                                         time.sleep(0.5)
                                     else:
-                                        print(f"[ERROR] Failed to navigate back after clicking button")
+                                        logger.error(f"Failed to navigate back after clicking button")
                                         return False
                                 else:
                                     raise
 
                         return True
                     else:
-                        print("[ERROR] 'Start Planting' button not found in popup!")
-                        print("[ERROR] Extension activation failed. Exiting script.")
+                        logger.error("'Start Planting' button not found in popup!")
+                        logger.error("Extension activation failed. Exiting script.")
                         sys.exit(1)
 
                 except Exception as e:
-                    print(f"[ERROR] Error finding/clicking 'Start Planting' button: {e}")
+                    logger.error(f"Error finding/clicking 'Start Planting' button: {e}")
                     import traceback
                     traceback.print_exc()
-                    print("[ERROR] Extension activation failed. Exiting script.")
+                    logger.error("Extension activation failed. Exiting script.")
                     sys.exit(1)
 
             else:
                 # SupportWithMellowtel: Just wait for popup to appear, no interaction needed
-                print("[INFO] SupportWithMellowtel popup opened. No interaction required.")
+                logger.info("SupportWithMellowtel popup opened. No interaction required.")
                 time.sleep(3)  # Wait for popup to fully load
 
                 # Navigate back to original site
-                print(f"[INFO] Navigating back to site: {original_url}")
+                logger.info(f"Navigating back to site: {original_url}")
                 max_retries = 3
                 for back_attempt in range(max_retries):
                     try:
                         self.driver.get(original_url)
                         time.sleep(2)
-                        print("[INFO] Back on site")
+                        logger.info("Back on site")
                         break
                     except TimeoutException as e:
-                        print(f"[ERROR] Timeout navigating back (attempt {back_attempt + 1}/{max_retries}): {e}")
+                        logger.error(f"Timeout navigating back (attempt {back_attempt + 1}/{max_retries}): {e}")
                         if back_attempt < max_retries - 1:
-                            print(f"[INFO] Retrying...")
+                            logger.info(f"Retrying...")
                             time.sleep(1)
                         else:
-                            print(f"[ERROR] Failed to navigate back after timeout")
+                            logger.error(f"Failed to navigate back after timeout")
                             raise
                     except RuntimeError as e:
                         if "dictionary changed size during iteration" in str(e):
                             if back_attempt < max_retries - 1:
-                                print(f"[WARNING] RuntimeError navigating back (selenium-wire cert bug)")
-                                print(f"[INFO] Retrying...")
+                                logger.warning(f"RuntimeError navigating back (selenium-wire cert bug)")
+                                logger.info(f"Retrying...")
                                 time.sleep(0.5)
                             else:
-                                print(f"[ERROR] Failed to navigate back")
+                                logger.error(f"Failed to navigate back")
                                 return False
                         else:
                             raise
@@ -565,10 +655,10 @@ class NetworkAnalyzer:
                 return True
 
         except Exception as e:
-            print(f"[ERROR] Error activating extension: {e}")
+            logger.error(f"Error activating extension: {e}")
             import traceback
             traceback.print_exc()
-            print("[ERROR] Extension activation failed. Exiting script.")
+            logger.error("Extension activation failed. Exiting script.")
             sys.exit(1)
 
     def extract_request_data(self, request) -> Dict[str, Any]:
@@ -596,7 +686,7 @@ class NetworkAnalyzer:
                 'response': response_data if request.response else None,
             }
         except Exception as e:
-            print(f"[WARNING] Error extracting request data: {e}")
+            logger.warning(f"Error extracting request data: {e}")
             return None
 
     def check_for_mellowtel_iframes(self) -> List[Dict[str, str]]:
@@ -636,7 +726,7 @@ class NetworkAnalyzer:
                 return []
 
         except Exception as e:
-            print(f"[WARNING] Error checking for Mellowtel iframes: {e}")
+            logger.warning(f"Error checking for Mellowtel iframes: {e}")
             return []
 
     def extract_domain(self, url: str) -> str:
@@ -719,9 +809,9 @@ class NetworkAnalyzer:
                     # Write as JSON Lines format
                     f.write(json.dumps(iframe_record) + '\n')
 
-            print(f"[INFO] Saved metadata for {len(self.iframe_metadata)} iframe(s)")
+            logger.info(f"Saved metadata for {len(self.iframe_metadata)} iframe(s)")
         except Exception as e:
-            print(f"[ERROR] Failed to save iframe metadata: {e}")
+            logger.error(f"Failed to save iframe metadata: {e}")
 
     def save_post_payload(self, request, site_url: str):
         """
@@ -750,7 +840,7 @@ class NetworkAnalyzer:
                 body = request.body
 
             if body is None:
-                print(f"[WARNING] POST request to request.mellow.tel has no body")
+                logger.warning(f"POST request to request.mellow.tel has no body")
                 return
 
             # Increment counter
@@ -788,10 +878,10 @@ class NetworkAnalyzer:
                 f.write(f"=" * 70 + "\n\n")
                 f.write(body_text)
 
-            print(f"[POST] Saved POST payload to: {filename} ({len(body) if body else 0} bytes)")
+            logger.info(f"[POST]Saved POST payload to: {filename} ({len(body) if body else 0} bytes)")
 
         except Exception as e:
-            print(f"[WARNING] Failed to save POST payload: {e}")
+            logger.warning(f"Failed to save POST payload: {e}")
             import traceback
             traceback.print_exc()
 
@@ -856,7 +946,7 @@ class NetworkAnalyzer:
                 except RuntimeError as e:
                     if "dictionary changed size during iteration" in str(e):
                         # Skip this request and continue
-                        print(f"[WARNING] RuntimeError processing request {i}, skipping")
+                        logger.warning(f"RuntimeError processing request {i}, skipping")
                         continue
                     else:
                         raise
@@ -865,88 +955,95 @@ class NetworkAnalyzer:
             self.last_processed_request_index = total_requests
 
             if new_request_count > 0:
-                print(f"[INFO] Processed {new_request_count} new Mellowtel request(s)")
+                logger.info(f"Processed {new_request_count} new Mellowtel request(s)")
 
         except Exception as e:
-            print(f"[ERROR] Failed to process new requests: {e}")
+            logger.error(f"Failed to process new requests: {e}")
 
     def write_iframe_requests(self, iframe_url: str):
         """
         Write all aggregated requests for a specific iframe to the output file.
         Called when an iframe disappears from the DOM.
+        Uses async queue to prevent I/O blocking.
         """
         try:
             if iframe_url not in self.iframe_requests:
                 return
 
-            # Ensure output directory exists
-            Path(self.output_file).parent.mkdir(parents=True, exist_ok=True)
-
             iframe_data = self.iframe_requests[iframe_url]
             request_count = len(iframe_data['requests'])
 
             if request_count > 0:
-                with open(self.output_file, 'a') as f:
-                    for request_data in iframe_data['requests']:
-                        # Add iframe attribution
-                        request_data['iframe_src'] = iframe_url
-                        request_data['iframe_domain'] = iframe_data['domain']
+                # Build content in memory
+                content_lines = []
+                for request_data in iframe_data['requests']:
+                    # Add iframe attribution
+                    request_data['iframe_src'] = iframe_url
+                    request_data['iframe_domain'] = iframe_data['domain']
 
-                        # Write as JSON Lines format
-                        f.write(json.dumps(request_data) + '\n')
+                    # Add as JSON Lines format
+                    content_lines.append(json.dumps(request_data) + '\n')
 
-                print(f"[WRITE] Wrote {request_count} requests for iframe: {iframe_data['domain']}")
+                # Enqueue the write (non-blocking)
+                content = ''.join(content_lines)
+                self.file_writer.enqueue_write(self.output_file, content, mode='a')
+
+                logger.info(f"[WRITE]Queued {request_count} requests for iframe: {iframe_data['domain']}")
 
             # Remove from memory
             del self.iframe_requests[iframe_url]
 
         except Exception as e:
-            print(f"[ERROR] Failed to write iframe requests: {e}")
+            logger.error(f"Failed to queue iframe requests: {e}")
 
     def write_all_remaining_requests(self):
         """
         Write all remaining aggregated requests to file.
         Called at the end of site monitoring when iframes may still be visible.
+        Uses async queue to prevent I/O blocking.
         """
         try:
             if not self.iframe_requests:
-                print("[INFO] No remaining requests to write")
+                logger.info("No remaining requests to write")
                 return
 
-            Path(self.output_file).parent.mkdir(parents=True, exist_ok=True)
-
-            total_written = 0
+            total_queued = 0
             for iframe_url, iframe_data in list(self.iframe_requests.items()):
                 request_count = len(iframe_data['requests'])
 
                 if request_count > 0:
-                    with open(self.output_file, 'a') as f:
-                        for request_data in iframe_data['requests']:
-                            # Add iframe attribution
-                            request_data['iframe_src'] = iframe_url
-                            request_data['iframe_domain'] = iframe_data['domain']
+                    # Build content in memory
+                    content_lines = []
+                    for request_data in iframe_data['requests']:
+                        # Add iframe attribution
+                        request_data['iframe_src'] = iframe_url
+                        request_data['iframe_domain'] = iframe_data['domain']
 
-                            # Write as JSON Lines format
-                            f.write(json.dumps(request_data) + '\n')
+                        # Add as JSON Lines format
+                        content_lines.append(json.dumps(request_data) + '\n')
 
-                    total_written += request_count
-                    print(f"[WRITE] Wrote {request_count} remaining requests for iframe: {iframe_data['domain']}")
+                    # Enqueue the write (non-blocking)
+                    content = ''.join(content_lines)
+                    self.file_writer.enqueue_write(self.output_file, content, mode='a')
+
+                    total_queued += request_count
+                    logger.info(f"[WRITE]Queued {request_count} remaining requests for iframe: {iframe_data['domain']}")
 
             # Clear all
             self.iframe_requests.clear()
-            print(f"[INFO] Total remaining requests written: {total_written}")
+            logger.info(f"Total remaining requests queued: {total_queued}")
 
         except Exception as e:
-            print(f"[ERROR] Failed to write remaining requests: {e}")
+            logger.error(f"Failed to queue remaining requests: {e}")
 
     def scroll_page(self):
         """Scroll down the page a bit."""
         try:
             # Scroll down by 500 pixels
             self.driver.execute_script("window.scrollBy(0, 500);")
-            print("[INFO] Scrolled down 500 pixels")
+            logger.info("Scrolled down 500 pixels")
         except Exception as e:
-            print(f"[WARNING] Error scrolling page: {e}")
+            logger.warning(f"Error scrolling page: {e}")
 
     def close_all_tabs_except_one(self):
         """Close all tabs except one to start fresh."""
@@ -954,7 +1051,7 @@ class NetworkAnalyzer:
             windows = self.driver.window_handles
 
             if len(windows) > 1:
-                print(f"[INFO] Closing {len(windows) - 1} extra tab(s)...")
+                logger.info(f"Closing {len(windows) - 1} extra tab(s)...")
 
                 # Keep the first tab, close all others
                 for i in range(len(windows) - 1, 0, -1):
@@ -963,12 +1060,12 @@ class NetworkAnalyzer:
 
                 # Switch back to the first (remaining) tab
                 self.driver.switch_to.window(windows[0])
-                print(f"[SUCCESS] All extra tabs closed, now have 1 tab")
+                logger.info(f"[SUCCESS]All extra tabs closed, now have 1 tab")
             else:
-                print(f"[INFO] Only 1 tab open, no need to close tabs")
+                logger.info(f"Only 1 tab open, no need to close tabs")
 
         except Exception as e:
-            print(f"[WARNING] Error closing tabs: {e}")
+            logger.warning(f"Error closing tabs: {e}")
             # Try to switch to first window if possible
             try:
                 if len(self.driver.window_handles) > 0:
@@ -978,7 +1075,7 @@ class NetworkAnalyzer:
 
     def visit_site(self, url: str, index: int, total: int):
         """Visit a single site and capture network activity."""
-        print(f"\n[{index}/{total}] Visiting: {url}")
+        logger.info(f"\n[{index}/{total}] Visiting: {url}")
 
         # Timeout retry loop - reinitialize driver on timeout
         max_timeout_retries = 2
@@ -989,13 +1086,13 @@ class NetworkAnalyzer:
 
                 # If this is a retry attempt, reinitialize the driver
                 if timeout_attempt > 0:
-                    print(f"[INFO] Timeout retry attempt {timeout_attempt + 1}/{max_timeout_retries + 1} for {url}")
+                    logger.info(f"Timeout retry attempt {timeout_attempt + 1}/{max_timeout_retries + 1} for {url}")
                     if not self.reinitialize_driver(reactivate_extension=need_reactivation):
-                        print(f"[ERROR] Failed to reinitialize driver on attempt {timeout_attempt + 1}")
+                        logger.error(f"Failed to reinitialize driver on attempt {timeout_attempt + 1}")
                         if timeout_attempt < max_timeout_retries:
                             continue
                         else:
-                            print(f"[ERROR] Skipping site {url} after {max_timeout_retries + 1} failed attempts")
+                            logger.error(f"Skipping site {url} after {max_timeout_retries + 1} failed attempts")
                             return
 
                 # Close all tabs except one to start fresh
@@ -1006,8 +1103,8 @@ class NetworkAnalyzer:
                     del self.driver.requests
                 except RuntimeError as e:
                     # Handle selenium-wire certificate dictionary iteration error
-                    print(f"[WARNING] RuntimeError clearing requests (selenium-wire cert bug): {e}")
-                    print("[INFO] Continuing anyway - this is a known selenium-wire issue")
+                    logger.warning(f"RuntimeError clearing requests (selenium-wire cert bug): {e}")
+                    logger.info("Continuing anyway - this is a known selenium-wire issue")
 
                 self.mellowtel_iframe_urls.clear()
                 self.mellowtel_domains.clear()
@@ -1023,7 +1120,7 @@ class NetworkAnalyzer:
                     try:
                         # Navigate to the URL
                         self.driver.get(url)
-                        print(f"[INFO] Page loaded.")
+                        logger.info(f"Page loaded.")
                         nav_success = True
                         break  # Success, exit retry loop
 
@@ -1031,11 +1128,11 @@ class NetworkAnalyzer:
                         # Handle selenium-wire certificate dictionary iteration error
                         if "dictionary changed size during iteration" in str(e):
                             if nav_attempt < max_retries - 1:
-                                print(f"[WARNING] RuntimeError during navigation (selenium-wire cert bug) on attempt {nav_attempt + 1}/{max_retries}: {e}")
-                                print(f"[INFO] Retrying navigation...")
+                                logger.warning(f"RuntimeError during navigation (selenium-wire cert bug) on attempt {nav_attempt + 1}/{max_retries}: {e}")
+                                logger.info(f"Retrying navigation...")
                                 time.sleep(0.5)
                             else:
-                                print(f"[ERROR] Failed to navigate after {max_retries} attempts")
+                                logger.error(f"Failed to navigate after {max_retries} attempts")
                                 raise
                         else:
                             # Re-raise if it's a different RuntimeError
@@ -1045,22 +1142,22 @@ class NetworkAnalyzer:
                         raise
 
                 if not nav_success:
-                    print(f"[ERROR] Failed to navigate to {url}")
+                    logger.error(f"Failed to navigate to {url}")
                     return
 
                 # Continue with the rest of the site visit logic
                 self._process_site_after_navigation(url)
 
                 # If we got here, the site visit was successful
-                print(f"[SUCCESS] Successfully completed visit to {url}")
+                logger.info(f"[SUCCESS]Successfully completed visit to {url}")
                 return
 
             except TimeoutException as e:
-                print(f"[ERROR] Timeout visiting {url} (attempt {timeout_attempt + 1}/{max_timeout_retries + 1}): {e}")
+                logger.error(f"Timeout visiting {url} (attempt {timeout_attempt + 1}/{max_timeout_retries + 1}): {e}")
                 if timeout_attempt < max_timeout_retries:
-                    print(f"[INFO] Will reinitialize driver and retry...")
+                    logger.info(f"Will reinitialize driver and retry...")
                 else:
-                    print(f"[ERROR] All retry attempts exhausted for {url}. Skipping site.")
+                    logger.error(f"All retry attempts exhausted for {url}. Skipping site.")
                     # Try to save whatever data we have
                     try:
                         self.process_new_requests(url)
@@ -1070,7 +1167,7 @@ class NetworkAnalyzer:
                         pass
                     return
             except Exception as e:
-                print(f"[ERROR] Unexpected error visiting {url}: {e}")
+                logger.error(f"Unexpected error visiting {url}: {e}")
                 # Try to save whatever data we have
                 try:
                     self.process_new_requests(url)
@@ -1090,9 +1187,9 @@ class NetworkAnalyzer:
             if not self.extension_activated:
                 self.activate_extension()
                 self.extension_activated = True
-                print(f"[INFO] Extension activated. This will not be repeated for subsequent sites.")
+                logger.info(f"Extension activated. This will not be repeated for subsequent sites.")
 
-            print(f"[INFO] Monitoring for Mellowtel iframe injection for {self.max_wait_for_iframe} seconds...")
+            logger.info(f"Monitoring for Mellowtel iframe injection for {self.max_wait_for_iframe} seconds...")
 
             # Poll for Mellowtel iframe detection continuously
             elapsed = 0
@@ -1125,10 +1222,10 @@ class NetworkAnalyzer:
                             domain = self.extract_domain(iframe_url)
                             if domain:
                                 self.mellowtel_domains.add(domain)
-                                print(f"[INFO] Tracking new domain: {domain}")
+                                logger.info(f"Tracking new domain: {domain}")
 
                         total_iframes_found = len(self.mellowtel_iframe_urls)
-                        print(f"[SUCCESS] New Mellowtel iframe(s) detected! Total tracking: {total_iframes_found} iframe URL(s) and {len(self.mellowtel_domains)} domain(s)")
+                        logger.info(f"[SUCCESS]New Mellowtel iframe(s) detected! Total tracking: {total_iframes_found} iframe URL(s) and {len(self.mellowtel_domains)} domain(s)")
 
                 # Detect disappeared iframes (iframes that were visible but are no longer)
                 disappeared_iframes = self.current_visible_iframes - currently_visible
@@ -1137,7 +1234,7 @@ class NetworkAnalyzer:
                     self.process_new_requests(url)
 
                     for iframe_url in disappeared_iframes:
-                        print(f"[IFRAME] Iframe disappeared: {self.extract_domain(iframe_url)}")
+                        logger.info(f"[IFRAME]Iframe disappeared: {self.extract_domain(iframe_url)}")
                         # Write requests for this iframe to file
                         self.write_iframe_requests(iframe_url)
 
@@ -1158,10 +1255,10 @@ class NetworkAnalyzer:
 
             # Summary of monitoring period
             if total_iframes_found > 0:
-                print(f"[INFO] Monitoring complete. Total {total_iframes_found} Mellowtel iframe(s) detected and tracked.")
+                logger.info(f"Monitoring complete. Total {total_iframes_found} Mellowtel iframe(s) detected and tracked.")
             else:
-                print(f"[WARNING] No Mellowtel iframes detected after {self.max_wait_for_iframe} seconds")
-                print(f"[INFO] Waiting {self.dwell_time} seconds for any potential Mellowtel activity...")
+                logger.warning(f"No Mellowtel iframes detected after {self.max_wait_for_iframe} seconds")
+                logger.info(f"Waiting {self.dwell_time} seconds for any potential Mellowtel activity...")
 
                 # Additional wait with scrolling if no iframes found
                 wait_elapsed = 0
@@ -1176,7 +1273,7 @@ class NetworkAnalyzer:
                     wait_elapsed += sleep_time
 
             # Process any final new requests
-            print(f"[INFO] Processing final requests...")
+            logger.info(f"Processing final requests...")
             self.process_new_requests(url)
 
             # Write all remaining requests to file (for iframes still visible)
@@ -1187,10 +1284,10 @@ class NetworkAnalyzer:
 
         except TimeoutException:
             # Re-raise TimeoutException to be handled by outer retry loop in visit_site()
-            print(f"[WARNING] Timeout during site monitoring - will retry with driver reinitialization")
+            logger.warning(f"Timeout during site monitoring - will retry with driver reinitialization")
             raise
         except Exception as e:
-            print(f"[ERROR] Error during site monitoring {url}: {e}")
+            logger.error(f"Error during site monitoring {url}: {e}")
             # Try to save whatever data we have
             try:
                 self.process_new_requests(url)
@@ -1203,39 +1300,39 @@ class NetworkAnalyzer:
 
     def run_experiment(self):
         """Main experiment execution."""
-        print("=" * 70)
-        print("Mellowtel SDK Network Analysis Tool - Targeted Capture Mode")
-        print("=" * 70)
-        print(f"Configuration:")
-        print(f"  - Iframe detection polling: every {self.iframe_poll_interval} seconds")
-        print(f"  - Max wait for iframe: {self.max_wait_for_iframe} seconds")
-        print(f"  - Fallback dwell time: {self.dwell_time} seconds (if no iframe detected)")
-        print(f"  - Headless mode: {self.headless}")
-        print(f"  - Disable images: {self.disable_images}")
-        print(f"  - Output directory: {self.run_dir}/")
-        print(f"    - Network logs: network_logs.jsonl")
-        print(f"    - Iframe metadata: iframe_metadata.jsonl")
-        print(f"    - POST payloads: post_payloads/")
-        print(f"\nFiltering & Aggregation:")
-        print(f"  - Only capturing requests to 'request.mellow.tel'")
-        print(f"  - Only capturing requests with same domain as Mellowtel iframes")
-        print(f"  - Detecting iframes with 'mllwtl' in id/data-id attributes")
-        print(f"  - Tracking iframe presence duration")
-        print(f"  - Categorizing requests by iframe/domain in real-time")
-        print(f"  - Writing to file when iframe disappears from DOM")
-        print(f"  - Saving POST payloads to request.mellow.tel with text content-type")
-        print("=" * 70)
+        logger.info("=" * 70)
+        logger.info("Mellowtel SDK Network Analysis Tool - Targeted Capture Mode")
+        logger.info("=" * 70)
+        logger.info(f"Configuration:")
+        logger.info(f"  - Iframe detection polling: every {self.iframe_poll_interval} seconds")
+        logger.info(f"  - Max wait for iframe: {self.max_wait_for_iframe} seconds")
+        logger.info(f"  - Fallback dwell time: {self.dwell_time} seconds (if no iframe detected)")
+        logger.info(f"  - Headless mode: {self.headless}")
+        logger.info(f"  - Disable images: {self.disable_images}")
+        logger.info(f"  - Output directory: {self.run_dir}/")
+        logger.info(f"    - Network logs: network_logs.jsonl")
+        logger.info(f"    - Iframe metadata: iframe_metadata.jsonl")
+        logger.info(f"    - POST payloads: post_payloads/")
+        logger.info(f"\nFiltering & Aggregation:")
+        logger.info(f"  - Only capturing requests to 'request.mellow.tel'")
+        logger.info(f"  - Only capturing requests with same domain as Mellowtel iframes")
+        logger.info(f"  - Detecting iframes with 'mllwtl' in id/data-id attributes")
+        logger.info(f"  - Tracking iframe presence duration")
+        logger.info(f"  - Categorizing requests by iframe/domain in real-time")
+        logger.info(f"  - Writing to file when iframe disappears from DOM")
+        logger.info(f"  - Saving POST payloads to request.mellow.tel with text content-type")
+        logger.info("=" * 70)
 
         # Load sites
         sites = self.load_sites()
 
         if not sites:
-            print("[ERROR] No sites to visit. Exiting.")
+            logger.error("No sites to visit. Exiting.")
             sys.exit(1)
 
         # Create run directory
         Path(self.run_dir).mkdir(parents=True, exist_ok=True)
-        print(f"[INFO] Created output directory: {self.run_dir}/")
+        logger.info(f"Created output directory: {self.run_dir}/")
 
 
         # Initialize driver with retry logic for TimeoutException
@@ -1246,39 +1343,39 @@ class NetworkAnalyzer:
             try:
                 if init_attempt == 0:
                     # First attempt - normal initialization
-                    print("[INFO] Initializing Chrome driver...")
+                    logger.info("Initializing Chrome driver...")
                     self.initialize_driver()
                     self.get_extension_id()
                 else:
                     # Retry attempt - full reinitialization
-                    print(f"[INFO] Initialization attempt {init_attempt + 1}/{max_init_retries + 1} after timeout")
+                    logger.info(f"Initialization attempt {init_attempt + 1}/{max_init_retries + 1} after timeout")
                     if not self.reinitialize_driver(reactivate_extension=False):
-                        print(f"[ERROR] Reinitialization failed on attempt {init_attempt + 1}")
+                        logger.error(f"Reinitialization failed on attempt {init_attempt + 1}")
                         continue
 
                 init_success = True
-                print("[SUCCESS] Driver initialization completed")
+                logger.info("[SUCCESS]Driver initialization completed")
                 break
 
             except TimeoutException as e:
-                print(f"[ERROR] Timeout during initialization (attempt {init_attempt + 1}/{max_init_retries + 1}): {e}")
+                logger.error(f"Timeout during initialization (attempt {init_attempt + 1}/{max_init_retries + 1}): {e}")
                 if init_attempt < max_init_retries:
-                    print(f"[INFO] Retrying initialization...")
+                    logger.info(f"Retrying initialization...")
                 else:
-                    print(f"[ERROR] All initialization attempts exhausted. Cannot continue.")
+                    logger.error(f"All initialization attempts exhausted. Cannot continue.")
                     sys.exit(1)
             except Exception as e:
-                print(f"[ERROR] Unexpected error during initialization: {e}")
+                logger.error(f"Unexpected error during initialization: {e}")
                 import traceback
                 traceback.print_exc()
                 if init_attempt < max_init_retries:
-                    print(f"[INFO] Retrying initialization...")
+                    logger.info(f"Retrying initialization...")
                 else:
-                    print(f"[ERROR] All initialization attempts exhausted. Cannot continue.")
+                    logger.error(f"All initialization attempts exhausted. Cannot continue.")
                     sys.exit(1)
 
         if not init_success:
-            print("[ERROR] Failed to initialize driver after all retries")
+            logger.error("Failed to initialize driver after all retries")
             sys.exit(1)
 
         # Track experiment start time for 55-minute timeout
@@ -1290,38 +1387,47 @@ class NetworkAnalyzer:
                 # Check if more than 55 minutes have elapsed
                 elapsed_minutes = (time.time() - experiment_start_time) / 60
                 if elapsed_minutes > 55:
-                    print(f"\n[INFO] 55 minutes have elapsed ({elapsed_minutes:.1f} minutes). Finishing experiment early.")
-                    print(f"[INFO] Visited {idx - 1}/{len(sites)} sites before timeout.")
+                    logger.info(f"\n55 minutes have elapsed ({elapsed_minutes:.1f} minutes). Finishing experiment early.")
+                    logger.info(f"Visited {idx - 1}/{len(sites)} sites before timeout.")
                     break
 
                 self.visit_site(site, idx, len(sites))
 
-            print("\n" + "=" * 70)
-            print("Experiment completed successfully!")
-            print(f"\nAll output saved to: {self.run_dir}/")
-            print(f"  - Speedtest: speedtest.json")
-            print(f"  - Network logs: network_logs.jsonl")
-            print(f"  - Iframe metadata: iframe_metadata.jsonl")
+            logger.info("\n" + "=" * 70)
+            logger.info("Experiment completed successfully!")
+            logger.info(f"\nAll output saved to: {self.run_dir}/")
+            logger.info(f"  - Speedtest: speedtest.json")
+            logger.info(f"  - Network logs: network_logs.jsonl")
+            logger.info(f"  - Iframe metadata: iframe_metadata.jsonl")
             if self.post_payload_counter > 0:
-                print(f"  - POST payloads: {self.post_payload_counter} files in post_payloads/")
+                logger.info(f"  - POST payloads: {self.post_payload_counter} files in post_payloads/")
             else:
-                print(f"  - POST payloads: none captured (no text content-type)")
-            print("=" * 70)
+                logger.info(f"  - POST payloads: none captured (no text content-type)")
+            logger.info("=" * 70)
 
         except KeyboardInterrupt:
-            print("\n[INFO] Experiment interrupted by user")
+            logger.info("\nExperiment interrupted by user")
         except Exception as e:
-            print(f"\n[ERROR] Unexpected error: {e}")
+            logger.error(f"\nUnexpected error: {e}")
         finally:
+            # Shutdown file writer queue to ensure all writes complete
+            logger.info("Shutting down file writer queue...")
+            self.file_writer.shutdown()
+
             if self.driver:
-                print("[INFO] Closing browser...")
+                logger.info("Closing browser...")
                 self.driver.quit()
 
 
 def main():
     """Entry point for the script."""
-    analyzer = NetworkAnalyzer()
-    analyzer.run_experiment()
+    try:
+        analyzer = NetworkAnalyzer()
+        analyzer.run_experiment()
+    finally:
+        # Shutdown logging queue listener
+        logger.info("Shutting down logging queue...")
+        queue_listener.stop()
 
 
 if __name__ == '__main__':
