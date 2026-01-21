@@ -27,8 +27,13 @@ from selenium.common.exceptions import WebDriverException, TimeoutException
 log_queue = queue.Queue(-1)  # Unlimited size
 queue_handler = logging.handlers.QueueHandler(log_queue)
 
-# Configure root logger
-logger = logging.getLogger()
+# Configure root logger to WARNING (suppress library INFO messages)
+root_logger = logging.getLogger()
+root_logger.setLevel(logging.WARNING)  # Only warnings/errors from libraries
+root_logger.addHandler(queue_handler)
+
+# Create named logger for this application (INFO level for our messages)
+logger = logging.getLogger('mellowtel_analyzer')
 logger.setLevel(logging.INFO)
 logger.addHandler(queue_handler)
 
@@ -41,6 +46,15 @@ console_handler.setFormatter(formatter)
 # Start queue listener in background thread
 queue_listener = logging.handlers.QueueListener(log_queue, console_handler, respect_handler_level=True)
 queue_listener.start()
+
+# Suppress verbose third-party libraries explicitly
+logging.getLogger('urllib3').setLevel(logging.WARNING)
+logging.getLogger('selenium').setLevel(logging.WARNING)
+logging.getLogger('selenium_wire').setLevel(logging.WARNING)
+logging.getLogger('seleniumwire').setLevel(logging.WARNING)
+logging.getLogger('mitmproxy').setLevel(logging.WARNING)
+logging.getLogger('h11').setLevel(logging.WARNING)
+logging.getLogger('hpack').setLevel(logging.WARNING)
 
 
 class FileWriterQueue:
