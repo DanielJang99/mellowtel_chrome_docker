@@ -36,6 +36,7 @@ root_logger.addHandler(queue_handler)
 logger = logging.getLogger('mellowtel_analyzer')
 logger.setLevel(logging.INFO)
 logger.addHandler(queue_handler)
+logger.propagate = False  # Prevent propagation to root logger (avoid duplicate messages)
 
 # Setup console handler for the queue listener
 console_handler = logging.StreamHandler(sys.stdout)
