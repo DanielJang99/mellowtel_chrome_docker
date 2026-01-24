@@ -934,16 +934,42 @@ class NetworkAnalyzer:
 
                             # Check if it's a request to request.mellow.tel
                             if 'request.mellow.tel' in request.url:
-                                # This is a central request, attribute to all current iframes
-                                for iframe_url in self.current_visible_iframes:
-                                    if iframe_url not in self.iframe_requests:
+                                # Use Referer header to match to specific iframe
+                                referer = request_data['request_headers'].get('Referer') or request_data['request_headers'].get('referer')
+
+                                if referer:
+                                    referer_domain = self.extract_domain(referer)
+                                    matched = False
+
+                                    # Find matching iframe by domain
+                                    for iframe_url in self.current_visible_iframes:
                                         iframe_domain = self.extract_domain(iframe_url)
-                                        self.iframe_requests[iframe_url] = {
-                                            'domain': iframe_domain,
-                                            'requests': []
-                                        }
-                                    self.iframe_requests[iframe_url]['requests'].append(request_data.copy())
-                                    new_request_count += 1
+                                        if referer_domain == iframe_domain:
+                                            # Attribute to this specific iframe only
+                                            if iframe_url not in self.iframe_requests:
+                                                self.iframe_requests[iframe_url] = {
+                                                    'domain': iframe_domain,
+                                                    'requests': []
+                                                }
+                                            self.iframe_requests[iframe_url]['requests'].append(request_data)
+                                            new_request_count += 1
+                                            matched = True
+                                            break
+
+                                    if not matched:
+                                        logger.warning(f"Could not match Referer domain '{referer_domain}' to any visible iframe")
+                                else:
+                                    # Fallback: no referer, attribute to all current iframes (original behavior)
+                                    logger.warning(f"No Referer header for request.mellow.tel request, attributing to all iframes")
+                                    for iframe_url in self.current_visible_iframes:
+                                        if iframe_url not in self.iframe_requests:
+                                            iframe_domain = self.extract_domain(iframe_url)
+                                            self.iframe_requests[iframe_url] = {
+                                                'domain': iframe_domain,
+                                                'requests': []
+                                            }
+                                        self.iframe_requests[iframe_url]['requests'].append(request_data.copy())
+                                        new_request_count += 1
                             else:
                                 # Match request to iframe by domain
                                 for iframe_url in self.current_visible_iframes:
