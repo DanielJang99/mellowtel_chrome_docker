@@ -18,6 +18,7 @@ services:
       - DISABLE_IMAGES=false  # Set to true to disable image loading for faster execution
       - DISPLAY=:99  # Virtual display provided by Xvfb
       - ENABLE_TC=${ENABLE_TC:-false}  # Enable traffic control latency simulation
+      - ENABLE_RATE_LIMIT=${ENABLE_RATE_LIMIT:-false}  # Enable download bandwidth rate limiting
     shm_size: 3gb  # Increase shared memory size for Chrome
     security_opt:
       - seccomp:unconfined  # Required for Chrome sandbox in some environments
