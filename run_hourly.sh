@@ -7,12 +7,21 @@ TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 LOG_FILE="$PROJECT_DIR/logs/mellowtel_cron_${TIMESTAMP}.log"
 
 # Parse command-line arguments
-if [ "$1" = "-tc" ]; then
-    export ENABLE_TC=true
-    echo "$(date): Traffic control latency simulation ENABLED" >> "$LOG_FILE"
-else
-    export ENABLE_TC=false
-fi
+export ENABLE_TC=false
+export ENABLE_RATE_LIMIT=false
+
+for arg in "$@"; do
+    case "$arg" in
+        -tc)
+            export ENABLE_TC=true
+            echo "$(date): Traffic control latency simulation ENABLED" >> "$LOG_FILE"
+            ;;
+        -rate-limit)
+            export ENABLE_RATE_LIMIT=true
+            echo "$(date): Bandwidth rate limiting ENABLED" >> "$LOG_FILE"
+            ;;
+    esac
+done
 
 # Log start
 echo "========================================" >> "$LOG_FILE"
@@ -38,7 +47,7 @@ fi
 
 # Run docker-compose
 echo "$(date): Starting new container..." >> "$LOG_FILE"
-sudo ENABLE_TC=$ENABLE_TC docker-compose up >> "$LOG_FILE" 2>&1
+sudo ENABLE_TC=$ENABLE_TC ENABLE_RATE_LIMIT=$ENABLE_RATE_LIMIT docker-compose up >> "$LOG_FILE" 2>&1
 EXIT_CODE=$?
 
 # Clean up

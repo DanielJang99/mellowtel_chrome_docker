@@ -50,6 +50,51 @@ TIMEOUT=60
 # Ensure output directory exists
 mkdir -p "${OUTPUT_DIR}"
 
+echo ""
+echo "========================================"
+echo "Applying Download Bandwidth Limiting"
+echo "========================================"
+
+if [ "${ENABLE_RATE_LIMIT}" = "true" ]; then
+    # Randomly select bandwidth: 0=2Mbps, 1=25Mbps, 2=100Mbps
+    BANDWIDTH_CHOICE=$((RANDOM % 3))
+
+    case $BANDWIDTH_CHOICE in
+        0)
+            BANDWIDTH="2mbit"
+            echo "[INFO] Download bandwidth limit: 2 Mbps"
+            ;;
+        1)
+            BANDWIDTH="25mbit"
+            echo "[INFO] Download bandwidth limit: 25 Mbps"
+            ;;
+        2)
+            BANDWIDTH="100mbit"
+            echo "[INFO] Download bandwidth limit: 100 Mbps"
+            ;;
+    esac
+
+    echo "[INFO] Configuring ingress traffic control..."
+
+    # Load ifb module
+    modprobe ifb numifbs=1 || echo "[WARNING] Could not load ifb module"
+
+    # Bring up ifb0 interface
+    ip link set dev ifb0 up || echo "[WARNING] Could not bring up ifb0"
+
+    # Redirect ingress traffic from eth0 to ifb0
+    tc qdisc add dev eth0 handle ffff: ingress || echo "[WARNING] Could not add ingress qdisc"
+    tc filter add dev eth0 parent ffff: protocol ip u32 match u32 0 0 action mirred egress redirect dev ifb0 || echo "[WARNING] Could not add ingress filter"
+
+    # Apply rate limit on ifb0 (let tc calculate appropriate buffer depth)
+    tc qdisc add dev ifb0 root tbf rate $BANDWIDTH burst 32kbit || echo "[WARNING] Could not apply rate limit"
+
+    echo "[INFO] Download bandwidth limited to $BANDWIDTH"
+else
+    echo "[INFO] Bandwidth rate limiting disabled (ENABLE_RATE_LIMIT not set)"
+fi
+
+echo ""
 echo "========================================"
 echo "Running Network Speed Test"
 echo "========================================"
