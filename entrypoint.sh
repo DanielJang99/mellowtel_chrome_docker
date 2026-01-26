@@ -77,6 +77,9 @@ if [ "${ENABLE_RATE_LIMIT}" = "true" ]; then
     echo "[INFO] Configuring ingress traffic control..."
 
     # Note: ifb module should be loaded on host before starting container
+    # Create ifb0 interface in container's network namespace
+    ip link add ifb0 type ifb || echo "[WARNING] Could not create ifb0 interface"
+
     # Bring up ifb0 interface
     ip link set dev ifb0 up || echo "[WARNING] Could not bring up ifb0"
 
