@@ -45,6 +45,12 @@ else
     echo "$(date): No existing containers found" >> "$LOG_FILE"
 fi
 
+# Load ifb module on host if rate limiting is enabled
+if [ "$ENABLE_RATE_LIMIT" = "true" ]; then
+    echo "$(date): Loading ifb kernel module on host for rate limiting..." >> "$LOG_FILE"
+    sudo modprobe ifb numifbs=1 >> "$LOG_FILE" 2>&1 || echo "$(date): WARNING - Could not load ifb module" >> "$LOG_FILE"
+fi
+
 # Run docker-compose
 echo "$(date): Starting new container..." >> "$LOG_FILE"
 sudo ENABLE_TC=$ENABLE_TC ENABLE_RATE_LIMIT=$ENABLE_RATE_LIMIT docker-compose up >> "$LOG_FILE" 2>&1

@@ -76,9 +76,7 @@ if [ "${ENABLE_RATE_LIMIT}" = "true" ]; then
 
     echo "[INFO] Configuring ingress traffic control..."
 
-    # Load ifb module
-    modprobe ifb numifbs=1 || echo "[WARNING] Could not load ifb module"
-
+    # Note: ifb module should be loaded on host before starting container
     # Bring up ifb0 interface
     ip link set dev ifb0 up || echo "[WARNING] Could not bring up ifb0"
 
@@ -86,8 +84,8 @@ if [ "${ENABLE_RATE_LIMIT}" = "true" ]; then
     tc qdisc add dev eth0 handle ffff: ingress || echo "[WARNING] Could not add ingress qdisc"
     tc filter add dev eth0 parent ffff: protocol ip u32 match u32 0 0 action mirred egress redirect dev ifb0 || echo "[WARNING] Could not add ingress filter"
 
-    # Apply rate limit on ifb0 (let tc calculate appropriate buffer depth)
-    tc qdisc add dev ifb0 root tbf rate $BANDWIDTH burst 32kbit || echo "[WARNING] Could not apply rate limit"
+    # Apply rate limit on ifb0 (limit sets max queue size in bytes)
+    tc qdisc add dev ifb0 root tbf rate $BANDWIDTH burst 32kbit limit 10000 || echo "[WARNING] Could not apply rate limit"
 
     echo "[INFO] Download bandwidth limited to $BANDWIDTH"
 else
