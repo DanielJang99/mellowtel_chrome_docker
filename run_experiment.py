@@ -174,7 +174,7 @@ class NetworkAnalyzer:
         chrome_options.add_argument('--disable-setuid-sandbox')
         chrome_options.add_argument('--disable-software-rasterizer')
 
-        chrome_options.page_load_strategy = 'eager'
+        chrome_options.page_load_strategy = 'none'
 
         # Headless mode (only use if explicitly enabled, Xvfb is preferred to avoid HeadlessChrome user agent)
         if self.headless:
