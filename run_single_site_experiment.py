@@ -247,12 +247,13 @@ class NetworkAnalyzer:
                 logger.error(f"No sites found in {self.sites_file}")
                 sys.exit(1)
 
-            site = sites[0]
-            logger.info(f"Loaded site from {self.sites_file}: {site}")
-            return site
+            random.shuffle(sites)
+            logger.info(f"Randomized site visit order")
+
+            return sites[0]
         except FileNotFoundError:
             logger.error(f"Sites file not found: {self.sites_file}")
-            sys.exit(1)
+            return None
 
     def initialize_driver(self):
         """Initialize the Selenium WebDriver with selenium-wire."""
