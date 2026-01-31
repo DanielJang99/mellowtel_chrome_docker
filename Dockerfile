@@ -78,6 +78,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application files
 COPY run_experiment.py .
+COPY run_single_site_experiment.py .
 COPY diagnose.py .
 COPY test_minimal.py .
 COPY sites.txt .
