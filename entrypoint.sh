@@ -197,5 +197,22 @@ echo "Starting Mellowtel Analysis Experiment"
 echo "========================================"
 echo ""
 
-# Run the main experiment
-exec python3 run_experiment.py "$@"
+# Randomly select experiment type: 0=multi-site, 1=single-site
+EXPERIMENT_CHOICE=$((RANDOM % 2))
+
+case $EXPERIMENT_CHOICE in
+    0)
+        EXPERIMENT_SCRIPT="run_experiment.py"
+        echo "[INFO] Experiment type: Multi-site (5 minutes each)"
+        ;;
+    1)
+        EXPERIMENT_SCRIPT="run_single_site_experiment.py"
+        echo "[INFO] Experiment type: Single-site (40 minutes)"
+        ;;
+esac
+
+echo "[INFO] Running: python3 ${EXPERIMENT_SCRIPT}"
+echo ""
+
+# Run the selected experiment
+exec python3 $EXPERIMENT_SCRIPT "$@"
