@@ -153,29 +153,12 @@ if [ "${ENABLE_TC}" = "true" ]; then
 
     # Apply latency if not "none"
     if [ "$LATENCY" != "none" ]; then
-        echo "[INFO] Configuring traffic control for Mellowtel servers..."
+        echo "[INFO] Configuring traffic control to add ${LATENCY} latency to all outgoing traffic..."
 
-        # Resolve Mellowtel domain to IP addresses
-        MELLOWTEL_IPS=$(getent ahosts request.mellow.tel | awk '{print $1}' | sort -u)
+        # Apply netem delay directly to all egress (outgoing) traffic on eth0
+        tc qdisc add dev eth0 root netem delay $LATENCY || echo "[WARNING] Could not apply latency"
 
-        if [ -z "$MELLOWTEL_IPS" ]; then
-            echo "[WARNING] Could not resolve request.mellow.tel, skipping latency configuration"
-        else
-            echo "[INFO] Mellowtel IPs: $MELLOWTEL_IPS"
-
-            # Setup tc qdisc on eth0
-            tc qdisc add dev eth0 root handle 1: prio
-            tc qdisc add dev eth0 parent 1:3 handle 30: netem delay $LATENCY
-            tc filter add dev eth0 protocol ip parent 1:0 prio 3 handle 1 fw flowid 1:3
-
-            # Mark packets destined for Mellowtel IPs
-            for IP in $MELLOWTEL_IPS; do
-                iptables -t mangle -A OUTPUT -d $IP -j MARK --set-mark 1
-                echo "[INFO] Marked traffic to $IP for ${LATENCY} latency"
-            done
-
-            echo "[INFO] Traffic control configured successfully"
-        fi
+        echo "[INFO] Latency ${LATENCY} applied to all outgoing traffic"
     fi
 else
     echo "[INFO] Traffic control disabled (ENABLE_TC not set)"
