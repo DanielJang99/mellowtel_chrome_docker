@@ -801,32 +801,78 @@ class NetworkAnalyzer:
             # Update last_seen time
             self.iframe_metadata[src]['last_seen'] = current_time
 
-    def save_iframe_metadata(self, site_url: str):
-        """Save iframe metadata to JSONL file."""
+    def save_iframe_metadata(self, site_url: str, iframe_src: str = None):
+        """
+        Save iframe metadata to JSONL file.
+
+        Args:
+            site_url: The URL of the site being visited
+            iframe_src: Optional specific iframe src to save. If None, saves all iframes.
+        """
         try:
             # Ensure output directory exists
             Path(self.iframe_metadata_file).parent.mkdir(parents=True, exist_ok=True)
 
-            with open(self.iframe_metadata_file, 'a') as f:
-                for src, metadata in self.iframe_metadata.items():
-                    # Calculate duration
-                    duration = metadata['last_seen'] - metadata['first_seen']
+            if iframe_src:
+                # Save metadata for a single specific iframe
+                if iframe_src not in self.iframe_metadata:
+                    logger.warning(f"Iframe {iframe_src} not found in metadata")
+                    return
 
-                    iframe_record = {
-                        'visited_site': site_url,
-                        'src': metadata['src'],
-                        'id': metadata['id'],
-                        'data_id': metadata['data_id'],
-                        'domain': metadata['domain'],
-                        'first_seen': metadata['first_seen'],
-                        'last_seen': metadata['last_seen'],
-                        'duration_seconds': duration
-                    }
+                metadata = self.iframe_metadata[iframe_src]
 
-                    # Write as JSON Lines format
+                # Calculate duration
+                duration = metadata['last_seen'] - metadata['first_seen']
+
+                iframe_record = {
+                    'visited_site': site_url,
+                    'src': metadata['src'],
+                    'id': metadata['id'],
+                    'data_id': metadata['data_id'],
+                    'domain': metadata['domain'],
+                    'first_seen': metadata['first_seen'],
+                    'last_seen': metadata['last_seen'],
+                    'duration_seconds': duration
+                }
+
+                # Write as JSON Lines format
+                with open(self.iframe_metadata_file, 'a') as f:
                     f.write(json.dumps(iframe_record) + '\n')
 
-            logger.info(f"Saved metadata for {len(self.iframe_metadata)} iframe(s)")
+                logger.info(f"Saved metadata for iframe: {metadata['domain']}")
+
+                # Remove from memory after saving
+                del self.iframe_metadata[iframe_src]
+            else:
+                # Save metadata for all remaining iframes
+                if not self.iframe_metadata:
+                    logger.info("No iframe metadata to save")
+                    return
+
+                with open(self.iframe_metadata_file, 'a') as f:
+                    for src, metadata in self.iframe_metadata.items():
+                        # Calculate duration
+                        duration = metadata['last_seen'] - metadata['first_seen']
+
+                        iframe_record = {
+                            'visited_site': site_url,
+                            'src': metadata['src'],
+                            'id': metadata['id'],
+                            'data_id': metadata['data_id'],
+                            'domain': metadata['domain'],
+                            'first_seen': metadata['first_seen'],
+                            'last_seen': metadata['last_seen'],
+                            'duration_seconds': duration
+                        }
+
+                        # Write as JSON Lines format
+                        f.write(json.dumps(iframe_record) + '\n')
+
+                logger.info(f"Saved metadata for {len(self.iframe_metadata)} remaining iframe(s)")
+
+                # Clear all after saving
+                self.iframe_metadata.clear()
+
         except Exception as e:
             logger.error(f"Failed to save iframe metadata: {e}")
 
@@ -1271,6 +1317,8 @@ class NetworkAnalyzer:
                         logger.info(f"[IFRAME]Iframe disappeared: {self.extract_domain(iframe_url)}")
                         # Write requests for this iframe to file
                         self.write_iframe_requests(iframe_url)
+                        # Save metadata for this iframe
+                        self.save_iframe_metadata(url, iframe_url)
 
                 # Update current visible iframes
                 self.current_visible_iframes = currently_visible
