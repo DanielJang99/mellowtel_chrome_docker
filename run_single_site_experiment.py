@@ -28,9 +28,9 @@ from selenium.common.exceptions import WebDriverException, TimeoutException
 log_queue = queue.Queue(-1)  # Unlimited size
 queue_handler = logging.handlers.QueueHandler(log_queue)
 
-# Configure root logger to WARNING (suppress library INFO messages)
+# Configure root logger to DEBUG so all messages reach handlers (filtering is per-handler)
 root_logger = logging.getLogger()
-root_logger.setLevel(logging.WARNING)  # Only warnings/errors from libraries
+root_logger.setLevel(logging.DEBUG)
 root_logger.addHandler(queue_handler)
 
 # Create named logger for this application (INFO level for our messages)
@@ -45,18 +45,29 @@ console_handler.setLevel(logging.INFO)
 formatter = logging.Formatter('[%(levelname)s] %(message)s')
 console_handler.setFormatter(formatter)
 
-# Start queue listener in background thread
-queue_listener = logging.handlers.QueueListener(log_queue, console_handler, respect_handler_level=True)
+# Setup file handler for root logger — captures ALL network traffic at DEBUG level
+logs_dir = Path('logs')
+logs_dir.mkdir(exist_ok=True)
+root_log_path = logs_dir / f"root_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
+root_file_handler = logging.FileHandler(root_log_path, encoding='utf-8')
+root_file_handler.setLevel(logging.DEBUG)
+root_file_formatter = logging.Formatter('%(asctime)s [%(levelname)s] %(name)s: %(message)s')
+root_file_handler.setFormatter(root_file_formatter)
+
+# Start queue listener with both console (INFO+) and file (DEBUG+) handlers
+queue_listener = logging.handlers.QueueListener(
+    log_queue, console_handler, root_file_handler, respect_handler_level=True
+)
 queue_listener.start()
 
-# Suppress verbose third-party libraries explicitly
-logging.getLogger('urllib3').setLevel(logging.WARNING)
-logging.getLogger('selenium').setLevel(logging.WARNING)
-logging.getLogger('selenium_wire').setLevel(logging.WARNING)
-logging.getLogger('seleniumwire').setLevel(logging.WARNING)
-logging.getLogger('mitmproxy').setLevel(logging.WARNING)
-logging.getLogger('h11').setLevel(logging.WARNING)
-logging.getLogger('hpack').setLevel(logging.WARNING)
+# Library loggers at DEBUG — verbose output goes to root log file, console only shows INFO+
+logging.getLogger('urllib3').setLevel(logging.DEBUG)
+logging.getLogger('selenium').setLevel(logging.DEBUG)
+logging.getLogger('selenium_wire').setLevel(logging.DEBUG)
+logging.getLogger('seleniumwire').setLevel(logging.DEBUG)
+logging.getLogger('mitmproxy').setLevel(logging.DEBUG)
+logging.getLogger('h11').setLevel(logging.DEBUG)
+logging.getLogger('hpack').setLevel(logging.DEBUG)
 
 
 class FileWriterQueue:
@@ -270,9 +281,11 @@ class NetworkAnalyzer:
 
         chrome_options = self.setup_chrome_options()
 
-        # Selenium-wire options for network interception
+        # Selenium-wire options for network interception with full logging
         seleniumwire_options = {
             'disable_encoding': True,  # Don't decode responses
+            'request_storage_base_dir': '/tmp/seleniumwire',  # Store requests on disk
+            'enable_har': True,  # Enable HAR capture for detailed request/response logging
         }
 
         try:
@@ -282,6 +295,25 @@ class NetworkAnalyzer:
                 seleniumwire_options=seleniumwire_options
             )
             self.driver.set_page_load_timeout(60)
+            
+            # Set up request/response interceptors to log all network traffic
+            def request_interceptor(request):
+                logger.info(f"[NETWORK REQUEST] {request.method} {request.url}")
+                if request.headers:
+                    logger.debug(f"[REQUEST HEADERS] {dict(request.headers)}")
+                if request.body:
+                    body_preview = request.body[:500] if len(request.body) > 500 else request.body
+                    logger.debug(f"[REQUEST BODY] {body_preview}")
+            
+            def response_interceptor(request, response):
+                logger.info(f"[NETWORK RESPONSE] {response.status_code} {request.url}")
+                if response.headers:
+                    logger.debug(f"[RESPONSE HEADERS] {dict(response.headers)}")
+            
+            self.driver.request_interceptor = request_interceptor
+            self.driver.response_interceptor = response_interceptor
+            logger.info("Request/response interceptors configured for network logging")
+            
             logger.info("WebDriver initialized successfully")
         except WebDriverException as e:
             logger.error(f"Failed to initialize WebDriver: {e}")

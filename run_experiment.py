@@ -27,9 +27,9 @@ from selenium.common.exceptions import WebDriverException, TimeoutException
 log_queue = queue.Queue(-1)  # Unlimited size
 queue_handler = logging.handlers.QueueHandler(log_queue)
 
-# Configure root logger to WARNING (suppress library INFO messages)
+# Configure root logger to DEBUG so all messages reach handlers (filtering is per-handler)
 root_logger = logging.getLogger()
-root_logger.setLevel(logging.WARNING)  # Only warnings/errors from libraries
+root_logger.setLevel(logging.DEBUG)
 root_logger.addHandler(queue_handler)
 
 # Create named logger for this application (INFO level for our messages)
@@ -44,18 +44,29 @@ console_handler.setLevel(logging.INFO)
 formatter = logging.Formatter('[%(levelname)s] %(message)s')
 console_handler.setFormatter(formatter)
 
-# Start queue listener in background thread
-queue_listener = logging.handlers.QueueListener(log_queue, console_handler, respect_handler_level=True)
+# Setup file handler for root logger — captures ALL network traffic at DEBUG level
+logs_dir = Path('logs')
+logs_dir.mkdir(exist_ok=True)
+root_log_path = logs_dir / f"root_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
+root_file_handler = logging.FileHandler(root_log_path, encoding='utf-8')
+root_file_handler.setLevel(logging.DEBUG)
+root_file_formatter = logging.Formatter('%(asctime)s [%(levelname)s] %(name)s: %(message)s')
+root_file_handler.setFormatter(root_file_formatter)
+
+# Start queue listener with both console (INFO+) and file (DEBUG+) handlers
+queue_listener = logging.handlers.QueueListener(
+    log_queue, console_handler, root_file_handler, respect_handler_level=True
+)
 queue_listener.start()
 
-# Suppress verbose third-party libraries explicitly
-logging.getLogger('urllib3').setLevel(logging.WARNING)
-logging.getLogger('selenium').setLevel(logging.WARNING)
-logging.getLogger('selenium_wire').setLevel(logging.WARNING)
-logging.getLogger('seleniumwire').setLevel(logging.WARNING)
-logging.getLogger('mitmproxy').setLevel(logging.WARNING)
-logging.getLogger('h11').setLevel(logging.WARNING)
-logging.getLogger('hpack').setLevel(logging.WARNING)
+# Library loggers at DEBUG — verbose output goes to root log file, console only shows INFO+
+logging.getLogger('urllib3').setLevel(logging.DEBUG)
+logging.getLogger('selenium').setLevel(logging.DEBUG)
+logging.getLogger('selenium_wire').setLevel(logging.DEBUG)
+logging.getLogger('seleniumwire').setLevel(logging.DEBUG)
+logging.getLogger('mitmproxy').setLevel(logging.DEBUG)
+logging.getLogger('h11').setLevel(logging.DEBUG)
+logging.getLogger('hpack').setLevel(logging.DEBUG)
 
 
 class FileWriterQueue:
