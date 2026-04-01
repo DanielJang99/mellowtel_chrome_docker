@@ -42,7 +42,7 @@ logger.propagate = False  # Prevent propagation to root logger (avoid duplicate 
 # Setup console handler for the queue listener
 console_handler = logging.StreamHandler(sys.stdout)
 console_handler.setLevel(logging.INFO)
-formatter = logging.Formatter('[%(levelname)s] %(message)s')
+formatter = logging.Formatter('%(asctime)s [%(levelname)s] %(message)s')
 console_handler.setFormatter(formatter)
 
 # Setup file handler for root logger — captures ALL network traffic at DEBUG level
@@ -68,6 +68,12 @@ logging.getLogger('seleniumwire').setLevel(logging.DEBUG)
 logging.getLogger('mitmproxy').setLevel(logging.DEBUG)
 logging.getLogger('h11').setLevel(logging.DEBUG)
 logging.getLogger('hpack').setLevel(logging.DEBUG)
+
+INTERESTING_URL_PATTERNS = ('speed.cloudflare', 'aim.cloudflare', 'mellowtel', 'mellow.tel', 'mllwtl')
+
+
+def _is_interesting_url(url: str) -> bool:
+    return any(p in url for p in INTERESTING_URL_PATTERNS)
 
 
 class FileWriterQueue:
@@ -296,19 +302,25 @@ class NetworkAnalyzer:
             )
             self.driver.set_page_load_timeout(60)
             
-            # Set up request/response interceptors to log all network traffic
             def request_interceptor(request):
-                logger.info(f"[NETWORK REQUEST] {request.method} {request.url}")
-                if request.headers:
-                    logger.debug(f"[REQUEST HEADERS] {dict(request.headers)}")
-                if request.body:
-                    body_preview = request.body[:500] if len(request.body) > 500 else request.body
-                    logger.debug(f"[REQUEST BODY] {body_preview}")
-            
+                url = request.url
+                if _is_interesting_url(url):
+                    logger.info(f"[NETWORK REQUEST][MATCH] {request.method} {url}")
+                    logger.info(f"[REQUEST HEADERS][MATCH] {dict(request.headers)}")
+                    if request.body:
+                        logger.info(f"[REQUEST BODY][MATCH] {request.body}")
+                else:
+                    logger.info(f"[NETWORK REQUEST] {request.method} {url}")
+
             def response_interceptor(request, response):
-                logger.info(f"[NETWORK RESPONSE] {response.status_code} {request.url}")
-                if response.headers:
-                    logger.debug(f"[RESPONSE HEADERS] {dict(response.headers)}")
+                url = request.url
+                if _is_interesting_url(url):
+                    logger.info(f"[NETWORK RESPONSE][MATCH] {response.status_code} {url}")
+                    logger.info(f"[RESPONSE HEADERS][MATCH] {dict(response.headers)}")
+                    if response.body:
+                        logger.info(f"[RESPONSE BODY][MATCH] {response.body[:2000]}")
+                else:
+                    logger.info(f"[NETWORK RESPONSE] {response.status_code} {url}")
             
             self.driver.request_interceptor = request_interceptor
             self.driver.response_interceptor = response_interceptor

@@ -41,7 +41,7 @@ logger.propagate = False  # Prevent propagation to root logger (avoid duplicate 
 # Setup console handler for the queue listener
 console_handler = logging.StreamHandler(sys.stdout)
 console_handler.setLevel(logging.INFO)
-formatter = logging.Formatter('[%(levelname)s] %(message)s')
+formatter = logging.Formatter('%(asctime)s [%(levelname)s] %(message)s')
 console_handler.setFormatter(formatter)
 
 # Setup file handler for root logger — captures ALL network traffic at DEBUG level
@@ -67,6 +67,12 @@ logging.getLogger('seleniumwire').setLevel(logging.DEBUG)
 logging.getLogger('mitmproxy').setLevel(logging.DEBUG)
 logging.getLogger('h11').setLevel(logging.DEBUG)
 logging.getLogger('hpack').setLevel(logging.DEBUG)
+
+INTERESTING_URL_PATTERNS = ('speed.cloudflare', 'aim.cloudflare', 'mellowtel', 'mellow.tel', 'mllwtl')
+
+
+def _is_interesting_url(url: str) -> bool:
+    return any(p in url for p in INTERESTING_URL_PATTERNS)
 
 
 class FileWriterQueue:
@@ -279,9 +285,11 @@ class NetworkAnalyzer:
 
         chrome_options = self.setup_chrome_options()
 
-        # Selenium-wire options for network interception
+        # Selenium-wire options for network interception with full logging
         seleniumwire_options = {
-            'disable_encoding': True,  # Don't decode responses
+            'disable_encoding': True,
+            'request_storage_base_dir': '/tmp/seleniumwire',
+            'enable_har': True,
         }
 
         try:
@@ -291,6 +299,31 @@ class NetworkAnalyzer:
                 seleniumwire_options=seleniumwire_options
             )
             self.driver.set_page_load_timeout(60)
+
+            def request_interceptor(request):
+                url = request.url
+                if _is_interesting_url(url):
+                    logger.info(f"[NETWORK REQUEST][MATCH] {request.method} {url}")
+                    logger.info(f"[REQUEST HEADERS][MATCH] {dict(request.headers)}")
+                    if request.body:
+                        logger.info(f"[REQUEST BODY][MATCH] {request.body}")
+                else:
+                    logger.info(f"[NETWORK REQUEST] {request.method} {url}")
+
+            def response_interceptor(request, response):
+                url = request.url
+                if _is_interesting_url(url):
+                    logger.info(f"[NETWORK RESPONSE][MATCH] {response.status_code} {url}")
+                    logger.info(f"[RESPONSE HEADERS][MATCH] {dict(response.headers)}")
+                    if response.body:
+                        logger.info(f"[RESPONSE BODY][MATCH] {response.body[:2000]}")
+                else:
+                    logger.info(f"[NETWORK RESPONSE] {response.status_code} {url}")
+
+            self.driver.request_interceptor = request_interceptor
+            self.driver.response_interceptor = response_interceptor
+            logger.info("Request/response interceptors configured for network logging")
+
             logger.info("WebDriver initialized successfully")
         except WebDriverException as e:
             logger.error(f"Failed to initialize WebDriver: {e}")
