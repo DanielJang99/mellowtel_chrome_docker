@@ -346,8 +346,8 @@ class NetworkAnalyzer:
                         logger.info(f"[REQUEST HEADERS][MATCH] {dict(request.headers)}")
                         if request.body:
                             logger.info(f"[REQUEST BODY][MATCH] {request.body}")
-                    else:
-                        logger.info(f"[NETWORK REQUEST] {request.method} {url}")
+                    # else:
+                    #     logger.info(f"[NETWORK REQUEST] {request.method} {url}")
 
                 def response_interceptor(request, response):
                     url = request.url
@@ -356,8 +356,8 @@ class NetworkAnalyzer:
                         logger.info(f"[RESPONSE HEADERS][MATCH] {dict(response.headers)}")
                         if response.body:
                             logger.info(f"[RESPONSE BODY][MATCH] {response.body[:2000]}")
-                    else:
-                        logger.info(f"[NETWORK RESPONSE] {response.status_code} {url}")
+                    # else:
+                    #     logger.info(f"[NETWORK RESPONSE] {response.status_code} {url}")
 
                 self.driver.request_interceptor = request_interceptor
                 self.driver.response_interceptor = response_interceptor
