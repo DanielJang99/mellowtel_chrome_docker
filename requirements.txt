@@ -7,5 +7,6 @@ hyperframe==6.0.1
 kaitaistruct==0.10
 pyOpenSSL==23.3.0
 pyasn1==0.5.1
+websocket-client==1.7.0
 wsproto==1.2.0
 zstandard==0.22.0

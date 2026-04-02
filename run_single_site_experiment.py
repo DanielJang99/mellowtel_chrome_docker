@@ -73,60 +73,106 @@ def _is_interesting_url(url: str) -> bool:
     return any(p in url for p in INTERESTING_URL_PATTERNS)
 
 
-def _start_websocket_log_poller(driver, stop_event: threading.Event, poll_interval: float = 1.0):
-    """Background thread that polls Chrome performance logs for WebSocket events on interesting URLs."""
+def _start_websocket_cdp_monitor(stop_event: threading.Event):
+    """Connect directly to Chrome DevTools Protocol via remote debugging port to monitor WebSocket traffic.
+
+    selenium-wire uses a proxy for HTTP interception and does not consume the CDP connection,
+    so we can connect independently to port 9222 for real-time WebSocket frame capture.
+    """
+    import urllib.request
+    import websocket as ws_client
+
     ws_connections = {}  # requestId -> url
 
-    def _poll():
+    def _handle_cdp_event(method, params):
+        if method == 'Network.webSocketCreated':
+            url = params.get('url', '')
+            req_id = params.get('requestId', '')
+            if _is_interesting_url(url):
+                ws_connections[req_id] = url
+                logger.info(f"[WEBSOCKET CREATED][MATCH] {url} (requestId={req_id})")
+
+        elif method == 'Network.webSocketClosed':
+            req_id = params.get('requestId', '')
+            url = ws_connections.pop(req_id, None)
+            if url:
+                logger.info(f"[WEBSOCKET CLOSED][MATCH] {url} (requestId={req_id})")
+
+        elif method == 'Network.webSocketFrameSent':
+            req_id = params.get('requestId', '')
+            if req_id in ws_connections:
+                payload = params.get('response', {}).get('payloadData', '')
+                logger.info(f"[WEBSOCKET SENT][MATCH] {ws_connections[req_id]} payload={payload}")
+
+        elif method == 'Network.webSocketFrameReceived':
+            req_id = params.get('requestId', '')
+            if req_id in ws_connections:
+                payload = params.get('response', {}).get('payloadData', '')
+                logger.info(f"[WEBSOCKET RECV][MATCH] {ws_connections[req_id]} payload={payload}")
+
+        elif method == 'Network.webSocketFrameError':
+            req_id = params.get('requestId', '')
+            if req_id in ws_connections:
+                error = params.get('errorMessage', '')
+                logger.info(f"[WEBSOCKET ERROR][MATCH] {ws_connections[req_id]} error={error}")
+
+    def _connect_and_listen():
+        """Find a page target, connect to its CDP WebSocket, enable Network domain, and listen."""
+        with urllib.request.urlopen('http://localhost:9222/json') as resp:
+            targets = json.loads(resp.read().decode())
+
+        ws_url = None
+        for target in targets:
+            if target.get('type') == 'page':
+                ws_url = target.get('webSocketDebuggerUrl')
+                break
+
+        if not ws_url:
+            logger.warning("[WEBSOCKET MONITOR] No page target found on debugging port 9222")
+            return False
+
+        ws = ws_client.WebSocket()
+        ws.connect(ws_url)
+        ws.settimeout(1.0)
+
+        ws.send(json.dumps({"id": 1, "method": "Network.enable", "params": {}}))
+        logger.info(f"[WEBSOCKET MONITOR] Connected to CDP target, Network.enable sent")
+
         while not stop_event.is_set():
             try:
-                logs = driver.get_log('performance')
-                for entry in logs:
-                    try:
-                        msg = json.loads(entry['message'])['message']
-                        method = msg.get('method', '')
-                        params = msg.get('params', {})
+                raw = ws.recv()
+                msg = json.loads(raw)
+                method = msg.get('method', '')
+                if method.startswith('Network.webSocket'):
+                    _handle_cdp_event(method, msg.get('params', {}))
+            except ws_client.WebSocketTimeoutException:
+                continue
+            except ws_client.WebSocketConnectionClosedException:
+                logger.info("[WEBSOCKET MONITOR] CDP connection closed, will reconnect")
+                break
+            except Exception as e:
+                if not stop_event.is_set():
+                    logger.debug(f"[WEBSOCKET MONITOR] recv error: {e}")
+                break
 
-                        if method == 'Network.webSocketCreated':
-                            url = params.get('url', '')
-                            req_id = params.get('requestId', '')
-                            if _is_interesting_url(url):
-                                ws_connections[req_id] = url
-                                logger.info(f"[WEBSOCKET CREATED][MATCH] {url} (requestId={req_id})")
+        try:
+            ws.close()
+        except Exception:
+            pass
+        return True
 
-                        elif method == 'Network.webSocketClosed':
-                            req_id = params.get('requestId', '')
-                            url = ws_connections.pop(req_id, None)
-                            if url:
-                                logger.info(f"[WEBSOCKET CLOSED][MATCH] {url} (requestId={req_id})")
+    def _monitor():
+        while not stop_event.is_set():
+            try:
+                _connect_and_listen()
+            except Exception as e:
+                logger.debug(f"[WEBSOCKET MONITOR] Connection failed: {e}")
+            if not stop_event.is_set():
+                stop_event.wait(3.0)
 
-                        elif method == 'Network.webSocketFrameSent':
-                            req_id = params.get('requestId', '')
-                            if req_id in ws_connections:
-                                payload = params.get('response', {}).get('payloadData', '')
-                                logger.info(f"[WEBSOCKET SENT][MATCH] {ws_connections[req_id]} payload={payload}")
-
-                        elif method == 'Network.webSocketFrameReceived':
-                            req_id = params.get('requestId', '')
-                            if req_id in ws_connections:
-                                payload = params.get('response', {}).get('payloadData', '')
-                                logger.info(f"[WEBSOCKET RECV][MATCH] {ws_connections[req_id]} payload={payload}")
-
-                        elif method == 'Network.webSocketFrameError':
-                            req_id = params.get('requestId', '')
-                            if req_id in ws_connections:
-                                error = params.get('errorMessage', '')
-                                logger.info(f"[WEBSOCKET ERROR][MATCH] {ws_connections[req_id]} error={error}")
-
-                    except (json.JSONDecodeError, KeyError):
-                        continue
-            except Exception:
-                pass
-            stop_event.wait(poll_interval)
-
-    t = threading.Thread(target=_poll, daemon=True, name='ws-log-poller')
+    t = threading.Thread(target=_monitor, daemon=True, name='cdp-ws-monitor')
     t.start()
-    logger.info("WebSocket log poller thread started")
+    logger.info("[WEBSOCKET MONITOR] CDP WebSocket monitor thread started")
     return t
 
 
@@ -310,9 +356,6 @@ class NetworkAnalyzer:
         chrome_options.add_argument('--enable-logging')
         chrome_options.add_argument('--v=1')
 
-        # Enable performance logging to capture WebSocket events via CDP
-        chrome_options.set_capability('goog:loggingPrefs', {'performance': 'ALL'})
-
         return chrome_options
 
     def load_first_site(self) -> str:
@@ -389,7 +432,7 @@ class NetworkAnalyzer:
                 logger.info("Request/response interceptors configured for network logging")
 
                 self.ws_poller_stop.clear()
-                self.ws_poller_thread = _start_websocket_log_poller(self.driver, self.ws_poller_stop)
+                self.ws_poller_thread = _start_websocket_cdp_monitor(self.ws_poller_stop)
 
             logger.info("WebDriver initialized successfully")
         except WebDriverException as e:
