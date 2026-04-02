@@ -24,13 +24,14 @@ from selenium.webdriver.chrome.options import Options
 from selenium.common.exceptions import WebDriverException, TimeoutException
 
 
+VERBOSE = '--verbose' in sys.argv
+
 # Setup async logging with QueueHandler to prevent I/O blocking
 log_queue = queue.Queue(-1)  # Unlimited size
 queue_handler = logging.handlers.QueueHandler(log_queue)
 
-# Configure root logger to DEBUG so all messages reach handlers (filtering is per-handler)
 root_logger = logging.getLogger()
-root_logger.setLevel(logging.DEBUG)
+root_logger.setLevel(logging.DEBUG if VERBOSE else logging.WARNING)
 root_logger.addHandler(queue_handler)
 
 # Create named logger for this application (INFO level for our messages)
@@ -45,35 +46,88 @@ console_handler.setLevel(logging.INFO)
 formatter = logging.Formatter('%(asctime)s [%(levelname)s] %(message)s')
 console_handler.setFormatter(formatter)
 
-# Setup file handler for root logger — captures ALL network traffic at DEBUG level
-logs_dir = Path('logs')
-logs_dir.mkdir(exist_ok=True)
-root_log_path = logs_dir / f"root_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
-root_file_handler = logging.FileHandler(root_log_path, encoding='utf-8')
-root_file_handler.setLevel(logging.DEBUG)
-root_file_formatter = logging.Formatter('%(asctime)s [%(levelname)s] %(name)s: %(message)s')
-root_file_handler.setFormatter(root_file_formatter)
+_queue_handlers = [console_handler]
 
-# Start queue listener with both console (INFO+) and file (DEBUG+) handlers
-queue_listener = logging.handlers.QueueListener(
-    log_queue, console_handler, root_file_handler, respect_handler_level=True
-)
+if VERBOSE:
+    # Setup file handler for root logger — captures ALL network traffic at DEBUG level
+    logs_dir = Path('logs')
+    logs_dir.mkdir(exist_ok=True)
+    root_log_path = logs_dir / f"root_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
+    root_file_handler = logging.FileHandler(root_log_path, encoding='utf-8')
+    root_file_handler.setLevel(logging.DEBUG)
+    root_file_formatter = logging.Formatter('%(asctime)s [%(levelname)s] %(name)s: %(message)s')
+    root_file_handler.setFormatter(root_file_formatter)
+    _queue_handlers.append(root_file_handler)
+
+    # Library loggers at DEBUG — verbose output goes to root log file
+    for _lib in ('urllib3', 'selenium', 'selenium_wire', 'seleniumwire', 'mitmproxy', 'h11', 'hpack'):
+        logging.getLogger(_lib).setLevel(logging.DEBUG)
+
+queue_listener = logging.handlers.QueueListener(log_queue, *_queue_handlers, respect_handler_level=True)
 queue_listener.start()
-
-# Library loggers at DEBUG — verbose output goes to root log file, console only shows INFO+
-logging.getLogger('urllib3').setLevel(logging.DEBUG)
-logging.getLogger('selenium').setLevel(logging.DEBUG)
-logging.getLogger('selenium_wire').setLevel(logging.DEBUG)
-logging.getLogger('seleniumwire').setLevel(logging.DEBUG)
-logging.getLogger('mitmproxy').setLevel(logging.DEBUG)
-logging.getLogger('h11').setLevel(logging.DEBUG)
-logging.getLogger('hpack').setLevel(logging.DEBUG)
 
 INTERESTING_URL_PATTERNS = ('speed.cloudflare', 'aim.cloudflare', 'mellowtel', 'mellow.tel', 'mllwtl')
 
 
 def _is_interesting_url(url: str) -> bool:
     return any(p in url for p in INTERESTING_URL_PATTERNS)
+
+
+def _start_websocket_log_poller(driver, stop_event: threading.Event, poll_interval: float = 1.0):
+    """Background thread that polls Chrome performance logs for WebSocket events on interesting URLs."""
+    ws_connections = {}  # requestId -> url
+
+    def _poll():
+        while not stop_event.is_set():
+            try:
+                logs = driver.get_log('performance')
+                for entry in logs:
+                    try:
+                        msg = json.loads(entry['message'])['message']
+                        method = msg.get('method', '')
+                        params = msg.get('params', {})
+
+                        if method == 'Network.webSocketCreated':
+                            url = params.get('url', '')
+                            req_id = params.get('requestId', '')
+                            if _is_interesting_url(url):
+                                ws_connections[req_id] = url
+                                logger.info(f"[WEBSOCKET CREATED][MATCH] {url} (requestId={req_id})")
+
+                        elif method == 'Network.webSocketClosed':
+                            req_id = params.get('requestId', '')
+                            url = ws_connections.pop(req_id, None)
+                            if url:
+                                logger.info(f"[WEBSOCKET CLOSED][MATCH] {url} (requestId={req_id})")
+
+                        elif method == 'Network.webSocketFrameSent':
+                            req_id = params.get('requestId', '')
+                            if req_id in ws_connections:
+                                payload = params.get('response', {}).get('payloadData', '')
+                                logger.info(f"[WEBSOCKET SENT][MATCH] {ws_connections[req_id]} payload={payload}")
+
+                        elif method == 'Network.webSocketFrameReceived':
+                            req_id = params.get('requestId', '')
+                            if req_id in ws_connections:
+                                payload = params.get('response', {}).get('payloadData', '')
+                                logger.info(f"[WEBSOCKET RECV][MATCH] {ws_connections[req_id]} payload={payload}")
+
+                        elif method == 'Network.webSocketFrameError':
+                            req_id = params.get('requestId', '')
+                            if req_id in ws_connections:
+                                error = params.get('errorMessage', '')
+                                logger.info(f"[WEBSOCKET ERROR][MATCH] {ws_connections[req_id]} error={error}")
+
+                    except (json.JSONDecodeError, KeyError):
+                        continue
+            except Exception:
+                pass
+            stop_event.wait(poll_interval)
+
+    t = threading.Thread(target=_poll, daemon=True, name='ws-log-poller')
+    t.start()
+    logger.info("WebSocket log poller thread started")
+    return t
 
 
 class FileWriterQueue:
@@ -145,6 +199,7 @@ class NetworkAnalyzer:
     def __init__(self):
         # Initialize async file writer queue
         self.file_writer = FileWriterQueue()
+        self.verbose = VERBOSE
 
         self.monitoring_duration = 40 * 60  # 40 minutes in seconds
         self.iframe_poll_interval = 2  # Check for iframe every 2 seconds
@@ -179,6 +234,9 @@ class NetworkAnalyzer:
         self.iframe_requests = {}  # {iframe_src: {'domain': str, 'requests': [request_data]}}
         self.current_visible_iframes = set()  # Currently visible iframe URLs
         self.last_processed_request_index = 0  # Track which requests we've already processed
+
+        self.ws_poller_stop = threading.Event()
+        self.ws_poller_thread = None
 
     def setup_chrome_options(self) -> Options:
         """Configure Chrome options for the experiment."""
@@ -252,6 +310,9 @@ class NetworkAnalyzer:
         chrome_options.add_argument('--enable-logging')
         chrome_options.add_argument('--v=1')
 
+        # Enable performance logging to capture WebSocket events via CDP
+        chrome_options.set_capability('goog:loggingPrefs', {'performance': 'ALL'})
+
         return chrome_options
 
     def load_first_site(self) -> str:
@@ -302,30 +363,34 @@ class NetworkAnalyzer:
             )
             self.driver.set_page_load_timeout(60)
             
-            def request_interceptor(request):
-                url = request.url
-                if _is_interesting_url(url):
-                    logger.info(f"[NETWORK REQUEST][MATCH] {request.method} {url}")
-                    logger.info(f"[REQUEST HEADERS][MATCH] {dict(request.headers)}")
-                    if request.body:
-                        logger.info(f"[REQUEST BODY][MATCH] {request.body}")
-                else:
-                    logger.info(f"[NETWORK REQUEST] {request.method} {url}")
+            if self.verbose:
+                def request_interceptor(request):
+                    url = request.url
+                    if _is_interesting_url(url):
+                        logger.info(f"[NETWORK REQUEST][MATCH] {request.method} {url}")
+                        logger.info(f"[REQUEST HEADERS][MATCH] {dict(request.headers)}")
+                        if request.body:
+                            logger.info(f"[REQUEST BODY][MATCH] {request.body}")
+                    else:
+                        logger.info(f"[NETWORK REQUEST] {request.method} {url}")
 
-            def response_interceptor(request, response):
-                url = request.url
-                if _is_interesting_url(url):
-                    logger.info(f"[NETWORK RESPONSE][MATCH] {response.status_code} {url}")
-                    logger.info(f"[RESPONSE HEADERS][MATCH] {dict(response.headers)}")
-                    if response.body:
-                        logger.info(f"[RESPONSE BODY][MATCH] {response.body[:2000]}")
-                else:
-                    logger.info(f"[NETWORK RESPONSE] {response.status_code} {url}")
-            
-            self.driver.request_interceptor = request_interceptor
-            self.driver.response_interceptor = response_interceptor
-            logger.info("Request/response interceptors configured for network logging")
-            
+                def response_interceptor(request, response):
+                    url = request.url
+                    if _is_interesting_url(url):
+                        logger.info(f"[NETWORK RESPONSE][MATCH] {response.status_code} {url}")
+                        logger.info(f"[RESPONSE HEADERS][MATCH] {dict(response.headers)}")
+                        if response.body:
+                            logger.info(f"[RESPONSE BODY][MATCH] {response.body[:2000]}")
+                    else:
+                        logger.info(f"[NETWORK RESPONSE] {response.status_code} {url}")
+
+                self.driver.request_interceptor = request_interceptor
+                self.driver.response_interceptor = response_interceptor
+                logger.info("Request/response interceptors configured for network logging")
+
+                self.ws_poller_stop.clear()
+                self.ws_poller_thread = _start_websocket_log_poller(self.driver, self.ws_poller_stop)
+
             logger.info("WebDriver initialized successfully")
         except WebDriverException as e:
             logger.error(f"Failed to initialize WebDriver: {e}")
@@ -345,6 +410,9 @@ class NetworkAnalyzer:
         try:
             logger.info("Reinitializing Chrome driver...")
 
+            # Stop WebSocket poller before quitting driver
+            self.ws_poller_stop.set()
+
             # Quit existing driver if it exists
             if self.driver:
                 try:
@@ -355,7 +423,7 @@ class NetworkAnalyzer:
 
             self.driver = None
 
-            # Reinitialize driver
+            # Reinitialize driver (also restarts ws poller)
             self.initialize_driver()
 
             # Get extension ID
@@ -1504,6 +1572,8 @@ class NetworkAnalyzer:
             # Shutdown file writer queue to ensure all writes complete
             logger.info("Shutting down file writer queue...")
             self.file_writer.shutdown()
+
+            self.ws_poller_stop.set()
 
             if self.driver:
                 logger.info("Closing browser...")
