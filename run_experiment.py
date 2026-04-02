@@ -72,25 +72,44 @@ def _is_interesting_url(url: str) -> bool:
     return any(p in url for p in INTERESTING_URL_PATTERNS)
 
 
-def _install_websocket_message_capture():
-    """Monkey-patch selenium-wire's mitmproxy handler to capture WebSocket frames.
+class WebSocketCaptureAddon:
+    """Mitmproxy addon to capture WebSocket messages for ws.mellow.tel."""
 
-    Must be called BEFORE webdriver.Chrome() so mitmproxy registers the hook.
-    The traffic to ws.mellow.tel flows through mitmproxy (confirmed by the
-    'Streaming WebSocket messages' log), so hooking websocket_message on the
-    InterceptRequestHandler addon captures every frame.
-    """
-    from seleniumwire.handler import InterceptRequestHandler
+    def __init__(self):
+        self.ws_connections = 0
+        self.ws_messages = 0
+        logger.info("[WEBSOCKET] WebSocketCaptureAddon initialized")
 
-    if hasattr(InterceptRequestHandler, '_ws_capture_installed'):
-        return
-
-    def websocket_message(self, flow):
+    def websocket_start(self, flow):
+        """Called when a WebSocket connection is established."""
         try:
-            ws_msg = flow.websocket.messages[-1]
+            self.ws_connections += 1
             host = flow.request.pretty_host
             port = flow.request.port
             url = f"{host}:{port}"
+            if _is_interesting_url(url):
+                logger.info(f"[WEBSOCKET START][MATCH] wss://{url} - WebSocket connection established!")
+            else:
+                logger.debug(f"[WEBSOCKET START] wss://{url} (non-mellowtel, total connections: {self.ws_connections})")
+        except Exception as e:
+            logger.warning(f"[WEBSOCKET START] Error: {e}")
+
+    def websocket_message(self, flow):
+        """Called when a WebSocket message is sent or received."""
+        try:
+            # Check if websocket and messages exist before accessing
+            if not hasattr(flow, 'websocket') or not flow.websocket:
+                return
+
+            if not hasattr(flow.websocket, 'messages') or not flow.websocket.messages:
+                return
+
+            ws_msg = flow.websocket.messages[-1]
+            self.ws_messages += 1
+            host = flow.request.pretty_host
+            port = flow.request.port
+            url = f"{host}:{port}"
+
             if _is_interesting_url(url):
                 direction = "SENT" if ws_msg.from_client else "RECV"
                 content = ws_msg.content
@@ -100,12 +119,23 @@ def _install_websocket_message_capture():
                     except Exception:
                         content = f"<binary {len(content)} bytes>"
                 logger.info(f"[WEBSOCKET {direction}][MATCH] wss://{url} payload={content}")
+            else:
+                logger.debug(f"[WEBSOCKET] wss://{url} (non-mellowtel, total messages: {self.ws_messages})")
         except Exception as e:
-            logger.debug(f"[WEBSOCKET] Error processing frame: {e}")
+            logger.warning(f"[WEBSOCKET] Error processing frame: {e}")
+            import traceback
+            traceback.print_exc()
 
-    InterceptRequestHandler.websocket_message = websocket_message
-    InterceptRequestHandler._ws_capture_installed = True
-    logger.info("[WEBSOCKET] Mitmproxy websocket_message capture installed")
+    def websocket_end(self, flow):
+        """Called when a WebSocket connection is closed."""
+        try:
+            host = flow.request.pretty_host
+            port = flow.request.port
+            url = f"{host}:{port}"
+            if _is_interesting_url(url):
+                logger.info(f"[WEBSOCKET END][MATCH] wss://{url} - WebSocket connection closed")
+        except Exception as e:
+            logger.warning(f"[WEBSOCKET END] Error: {e}")
 
 
 class FileWriterQueue:
@@ -327,8 +357,15 @@ class NetworkAnalyzer:
             'enable_har': True,
         }
 
+        # Add WebSocket capture addon in verbose mode
         if self.verbose:
-            _install_websocket_message_capture()
+            seleniumwire_options['mitmproxy_options'] = {
+                'stream_websockets': True,  # Enable WebSocket streaming
+            }
+            # Register the addon
+            addon_instance = WebSocketCaptureAddon()
+            seleniumwire_options['mitmproxy_addons'] = [addon_instance]
+            logger.info("[WEBSOCKET] WebSocket capture addon registered with selenium-wire")
 
         try:
             logger.info("Starting Chrome with selenium-wire...")
