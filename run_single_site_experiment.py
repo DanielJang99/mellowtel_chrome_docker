@@ -73,107 +73,40 @@ def _is_interesting_url(url: str) -> bool:
     return any(p in url for p in INTERESTING_URL_PATTERNS)
 
 
-def _start_websocket_cdp_monitor(stop_event: threading.Event):
-    """Connect directly to Chrome DevTools Protocol via remote debugging port to monitor WebSocket traffic.
+def _install_websocket_message_capture():
+    """Monkey-patch selenium-wire's mitmproxy handler to capture WebSocket frames.
 
-    selenium-wire uses a proxy for HTTP interception and does not consume the CDP connection,
-    so we can connect independently to port 9222 for real-time WebSocket frame capture.
+    Must be called BEFORE webdriver.Chrome() so mitmproxy registers the hook.
+    The traffic to ws.mellow.tel flows through mitmproxy (confirmed by the
+    'Streaming WebSocket messages' log), so hooking websocket_message on the
+    InterceptRequestHandler addon captures every frame.
     """
-    import urllib.request
-    import websocket as ws_client
+    from seleniumwire.handler import InterceptRequestHandler
 
-    ws_connections = {}  # requestId -> url
+    if hasattr(InterceptRequestHandler, '_ws_capture_installed'):
+        return
 
-    def _handle_cdp_event(method, params):
-        if method == 'Network.webSocketCreated':
-            url = params.get('url', '')
-            req_id = params.get('requestId', '')
-            if _is_interesting_url(url):
-                ws_connections[req_id] = url
-                logger.info(f"[WEBSOCKET CREATED][MATCH] {url} (requestId={req_id})")
-
-        elif method == 'Network.webSocketClosed':
-            req_id = params.get('requestId', '')
-            url = ws_connections.pop(req_id, None)
-            if url:
-                logger.info(f"[WEBSOCKET CLOSED][MATCH] {url} (requestId={req_id})")
-
-        elif method == 'Network.webSocketFrameSent':
-            req_id = params.get('requestId', '')
-            if req_id in ws_connections:
-                payload = params.get('response', {}).get('payloadData', '')
-                logger.info(f"[WEBSOCKET SENT][MATCH] {ws_connections[req_id]} payload={payload}")
-
-        elif method == 'Network.webSocketFrameReceived':
-            req_id = params.get('requestId', '')
-            if req_id in ws_connections:
-                payload = params.get('response', {}).get('payloadData', '')
-                logger.info(f"[WEBSOCKET RECV][MATCH] {ws_connections[req_id]} payload={payload}")
-
-        elif method == 'Network.webSocketFrameError':
-            req_id = params.get('requestId', '')
-            if req_id in ws_connections:
-                error = params.get('errorMessage', '')
-                logger.info(f"[WEBSOCKET ERROR][MATCH] {ws_connections[req_id]} error={error}")
-
-    def _connect_and_listen():
-        """Find a page target, connect to its CDP WebSocket, enable Network domain, and listen."""
-        with urllib.request.urlopen('http://localhost:9222/json') as resp:
-            targets = json.loads(resp.read().decode())
-
-        ws_url = None
-        for target in targets:
-            if target.get('type') == 'page':
-                ws_url = target.get('webSocketDebuggerUrl')
-                break
-
-        if not ws_url:
-            logger.warning("[WEBSOCKET MONITOR] No page target found on debugging port 9222")
-            return False
-
-        ws = ws_client.WebSocket()
-        ws.connect(ws_url)
-        ws.settimeout(1.0)
-
-        ws.send(json.dumps({"id": 1, "method": "Network.enable", "params": {}}))
-        logger.info(f"[WEBSOCKET MONITOR] Connected to CDP target, Network.enable sent")
-
-        while not stop_event.is_set():
-            try:
-                raw = ws.recv()
-                msg = json.loads(raw)
-                method = msg.get('method', '')
-                if method.startswith('Network.webSocket'):
-                    _handle_cdp_event(method, msg.get('params', {}))
-            except ws_client.WebSocketTimeoutException:
-                continue
-            except ws_client.WebSocketConnectionClosedException:
-                logger.info("[WEBSOCKET MONITOR] CDP connection closed, will reconnect")
-                break
-            except Exception as e:
-                if not stop_event.is_set():
-                    logger.debug(f"[WEBSOCKET MONITOR] recv error: {e}")
-                break
-
+    def websocket_message(self, flow):
         try:
-            ws.close()
-        except Exception:
-            pass
-        return True
+            ws_msg = flow.websocket.messages[-1]
+            host = flow.request.pretty_host
+            port = flow.request.port
+            url = f"{host}:{port}"
+            if _is_interesting_url(url):
+                direction = "SENT" if ws_msg.from_client else "RECV"
+                content = ws_msg.content
+                if isinstance(content, bytes):
+                    try:
+                        content = content.decode('utf-8', errors='replace')
+                    except Exception:
+                        content = f"<binary {len(content)} bytes>"
+                logger.info(f"[WEBSOCKET {direction}][MATCH] wss://{url} payload={content}")
+        except Exception as e:
+            logger.debug(f"[WEBSOCKET] Error processing frame: {e}")
 
-    def _monitor():
-        while not stop_event.is_set():
-            try:
-                _connect_and_listen()
-            except Exception as e:
-                logger.debug(f"[WEBSOCKET MONITOR] Connection failed: {e}")
-            if not stop_event.is_set():
-                stop_event.wait(3.0)
-
-    t = threading.Thread(target=_monitor, daemon=True, name='cdp-ws-monitor')
-    t.start()
-    logger.info("[WEBSOCKET MONITOR] CDP WebSocket monitor thread started")
-    return t
+    InterceptRequestHandler.websocket_message = websocket_message
+    InterceptRequestHandler._ws_capture_installed = True
+    logger.info("[WEBSOCKET] Mitmproxy websocket_message capture installed")
 
 
 class FileWriterQueue:
@@ -281,8 +214,6 @@ class NetworkAnalyzer:
         self.current_visible_iframes = set()  # Currently visible iframe URLs
         self.last_processed_request_index = 0  # Track which requests we've already processed
 
-        self.ws_poller_stop = threading.Event()
-        self.ws_poller_thread = None
 
     def setup_chrome_options(self) -> Options:
         """Configure Chrome options for the experiment."""
@@ -398,6 +329,9 @@ class NetworkAnalyzer:
             'enable_har': True,  # Enable HAR capture for detailed request/response logging
         }
 
+        if self.verbose:
+            _install_websocket_message_capture()
+
         try:
             logger.info("Starting Chrome with selenium-wire...")
             self.driver = webdriver.Chrome(
@@ -405,7 +339,7 @@ class NetworkAnalyzer:
                 seleniumwire_options=seleniumwire_options
             )
             self.driver.set_page_load_timeout(60)
-            
+
             if self.verbose:
                 def request_interceptor(request):
                     url = request.url
@@ -431,9 +365,6 @@ class NetworkAnalyzer:
                 self.driver.response_interceptor = response_interceptor
                 logger.info("Request/response interceptors configured for network logging")
 
-                self.ws_poller_stop.clear()
-                self.ws_poller_thread = _start_websocket_cdp_monitor(self.ws_poller_stop)
-
             logger.info("WebDriver initialized successfully")
         except WebDriverException as e:
             logger.error(f"Failed to initialize WebDriver: {e}")
@@ -453,9 +384,6 @@ class NetworkAnalyzer:
         try:
             logger.info("Reinitializing Chrome driver...")
 
-            # Stop WebSocket poller before quitting driver
-            self.ws_poller_stop.set()
-
             # Quit existing driver if it exists
             if self.driver:
                 try:
@@ -466,7 +394,6 @@ class NetworkAnalyzer:
 
             self.driver = None
 
-            # Reinitialize driver (also restarts ws poller)
             self.initialize_driver()
 
             # Get extension ID
@@ -1615,8 +1542,6 @@ class NetworkAnalyzer:
             # Shutdown file writer queue to ensure all writes complete
             logger.info("Shutting down file writer queue...")
             self.file_writer.shutdown()
-
-            self.ws_poller_stop.set()
 
             if self.driver:
                 logger.info("Closing browser...")
