@@ -26,7 +26,7 @@ done
 
 # Log start
 echo "========================================" >> "$LOG_FILE"
-echo "$(date): Starting Mellowtel 5-day long duration analysis" >> "$LOG_FILE"
+echo "$(date): Starting Mellowtel 23-hour long duration analysis" >> "$LOG_FILE"
 
 # Navigate to project directory
 cd "$PROJECT_DIR" || {
@@ -53,7 +53,7 @@ if [ "$ENABLE_RATE_LIMIT" = "true" ]; then
 fi
 
 # Run docker-compose
-echo "$(date): Starting new container for 5-day experiment..." >> "$LOG_FILE"
+echo "$(date): Starting new container for 23-hour experiment..." >> "$LOG_FILE"
 sudo ENABLE_TC=$ENABLE_TC ENABLE_RATE_LIMIT=$ENABLE_RATE_LIMIT EXPERIMENT_TYPE=$EXPERIMENT_TYPE docker-compose up >> "$LOG_FILE" 2>&1
 EXIT_CODE=$?
 
@@ -62,9 +62,9 @@ sudo docker-compose down >> "$LOG_FILE" 2>&1
 
 # Log completion
 if [ $EXIT_CODE -eq 0 ]; then
-    echo "$(date): Mellowtel 5-day analysis completed successfully" >> "$LOG_FILE"
+    echo "$(date): Mellowtel 23-hour analysis completed successfully" >> "$LOG_FILE"
 else
-    echo "$(date): ERROR - Mellowtel 5-day analysis failed with exit code $EXIT_CODE" >> "$LOG_FILE"
+    echo "$(date): ERROR - Mellowtel 23-hour analysis failed with exit code $EXIT_CODE" >> "$LOG_FILE"
 fi
 
 echo "========================================" >> "$LOG_FILE"

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-Mellowtel SDK Network Analysis Tool - 5-Day Long Duration Mode
+Mellowtel SDK Network Analysis Tool - 23-Hour Long Duration Mode
 Captures all network activity from Chrome browsing with extension installed.
-Visits https://yasirzaki.net for 5 days to observe extended Mellowtel behavior.
+Visits https://yasirzaki.net for 23 hours to observe extended Mellowtel behavior.
 """
 
 import json
@@ -173,20 +173,20 @@ class FileWriterQueue:
 
 
 class NetworkAnalyzer:
-    """Main class for running the 5-day long-duration network analysis experiment."""
+    """Main class for running the 23-hour long-duration network analysis experiment."""
 
     def __init__(self):
         # Initialize async file writer queue
         self.file_writer = FileWriterQueue()
         self.verbose = VERBOSE
 
-        self.monitoring_duration = 5 * 24 * 60 * 60  # 5 days in seconds
+        self.monitoring_duration = 23 * 60 * 60  # 23 hours in seconds
         self.iframe_poll_interval = 2  # Check for iframe every 2 seconds
         self.headless = os.getenv('HEADLESS', 'false').lower() == 'true'
         self.disable_images = os.getenv('DISABLE_IMAGES', 'false').lower() == 'true'
 
         # Randomly select extension from available options
-        available_extensions = ['IdleForest.crx', 'SupportWithMellowtel.crx']
+        available_extensions = ['connectez.crx', 'disconnectez.crx']
         self.extension_name = random.choice(available_extensions)
         self.extension_path = os.path.join('crx_files', self.extension_name)
         logger.info(f"Selected extension: {self.extension_name}")
@@ -289,7 +289,7 @@ class NetworkAnalyzer:
         return chrome_options
 
     def get_target_url(self) -> str:
-        """Return the hardcoded target URL for 5-day monitoring."""
+        """Return the hardcoded target URL for 23-hour monitoring."""
         return "https://yasirzaki.net"
 
     def initialize_driver(self):
@@ -397,7 +397,7 @@ class NetworkAnalyzer:
 
     def get_extension_id(self) -> str:
         """
-        Get the extension ID for IdleForest extension.
+        Get the extension ID for Connectez/Disconnectez extension.
         Returns the extension ID or None if not found.
         """
         try:
@@ -442,7 +442,7 @@ class NetworkAnalyzer:
             self.driver.execute_script(script)
             time.sleep(2)
 
-            # Get all extension IDs and find IdleForest
+            # Get all extension IDs and find Connectez/Disconnectez
             script = """
             const manager = document.querySelector('extensions-manager');
             const itemList = manager.shadowRoot.querySelector('extensions-item-list');
@@ -460,10 +460,10 @@ class NetworkAnalyzer:
             extensions = self.driver.execute_script(script)
             for ext in extensions:
                 logger.info(f"Found extension: {ext['name']} (ID: {ext['id']})")
-                # Look for IdleForest or Idle Forest
-                if 'idle' in ext['name'].lower() and 'forest' in ext['name'].lower():
+                # Look for Connectez or Disconnectez
+                if 'connectez' in ext['name'].lower() or 'disconnectez' in ext['name'].lower():
                     self.extension_id = ext['id']
-                    logger.info(f"[SUCCESS]Found IdleForest extension ID: {self.extension_id}")
+                    logger.info(f"[SUCCESS]Found {ext['name']} extension ID: {self.extension_id}")
 
                     # Enable the extension if it's not already enabled
                     self.enable_extension(ext['id'])
@@ -473,7 +473,7 @@ class NetworkAnalyzer:
             # If not found by name, just use the first extension (assuming it's the only one)
             if extensions and len(extensions) > 0:
                 self.extension_id = extensions[0]['id']
-                logger.warning(f"Could not find 'IdleForest' by name. Using first extension: {self.extension_id}")
+                logger.warning(f"Could not find 'Connectez/Disconnectez' by name. Using first extension: {self.extension_id}")
 
                 # Enable the extension
                 self.enable_extension(extensions[0]['id'])
@@ -559,9 +559,10 @@ class NetworkAnalyzer:
 
     def activate_extension(self):
         """
-        Activate the extension by navigating to its popup URL.
-        - IdleForest: Clicks "Start Planting" button
-        - SupportWithMellowtel: No interaction needed, popup opens automatically
+        Activate the Connectez/Disconnectez extension by handling opt-in flow.
+        - First checks if browser auto-opened a tab with 'mellow.tel/opt-in'
+        - If found, clicks "Agree and continue" button
+        - If not found, navigates to popup and clicks mellowtel-settings button
         """
         if not self.extension_id:
             logger.warning("Extension ID not available. Skipping activation.")
@@ -572,167 +573,162 @@ class NetworkAnalyzer:
 
             # Save current URL to return to later
             original_url = self.driver.current_url
-            popup_url = f"chrome-extension://{self.extension_id}/popup.html"
 
-            # Open extension popup
-            logger.info(f"Opening extension popup...")
-            max_retries = 3
-            for popup_attempt in range(max_retries):
-                try:
-                    self.driver.get(popup_url)
-                    time.sleep(2)
-                    logger.info(f"[SUCCESS]Navigated to extension popup: {popup_url}")
-                    break  # Success
-                except TimeoutException as e:
-                    logger.error(f"Timeout opening popup (attempt {popup_attempt + 1}/{max_retries}): {e}")
-                    if popup_attempt < max_retries - 1:
-                        logger.info(f"Retrying...")
-                        time.sleep(1)
-                    else:
-                        logger.error(f"Failed to open popup after timeout")
-                        raise
-                except RuntimeError as e:
-                    if "dictionary changed size during iteration" in str(e):
-                        if popup_attempt < max_retries - 1:
-                            logger.warning(f"RuntimeError opening popup (selenium-wire cert bug) on attempt {popup_attempt + 1}/{max_retries}")
-                            logger.info(f"Retrying...")
-                            time.sleep(0.5)
-                        else:
-                            logger.error(f"Failed to open popup after {max_retries} attempts")
-                            return False
-                    else:
-                        raise
+            # Step 1: Check if browser auto-opened an opt-in tab
+            logger.info("Checking for auto-opened opt-in tab...")
+            all_windows = self.driver.window_handles
+            opt_in_tab_found = False
 
-            # Handle extension-specific activation
-            if 'IdleForest' in self.extension_name:
-                # IdleForest requires clicking "Start Planting" button
-                logger.info("Looking for 'Start Planting' button...")
+            for window_handle in all_windows:
+                self.driver.switch_to.window(window_handle)
+                current_url = self.driver.current_url
 
-                # Wait a bit for any dynamic content to load
-                time.sleep(2)
+                if 'mellow.tel/opt-in' in current_url:
+                    logger.info(f"[SUCCESS]Found auto-opened opt-in tab: {current_url}")
+                    opt_in_tab_found = True
 
-                try:
-                    # First, list all buttons to help debug
-                    list_buttons_script = """
-                    const buttons = document.querySelectorAll('button');
-                    const buttonInfo = [];
-                    buttons.forEach((button, index) => {
-                        buttonInfo.push({
-                            index: index,
-                            innerText: button.innerText,
-                            textContent: button.textContent,
-                            innerHTML: button.innerHTML
-                        });
-                    });
-                    return buttonInfo;
-                    """
+                    # Find and click "Agree and continue" button
+                    logger.info("Looking for 'Agree and continue' button...")
+                    time.sleep(2)  # Wait for page to load
 
-                    all_buttons = self.driver.execute_script(list_buttons_script)
-                    logger.info(f"Found {len(all_buttons)} button(s) in popup:")
-
-                    # Find button with text containing "Start Planting" (case-insensitive)
-                    find_button_script = """
-                    const buttons = document.querySelectorAll('button');
-                    for (let button of buttons) {
-                        const innerText = (button.innerText || '').trim();
-                        const textContent = (button.textContent || '').trim();
-
-                        if (innerText.toLowerCase().includes('start planting') ||
-                            textContent.toLowerCase().includes('start planting')) {
-                            return button;
-                        }
-                    }
-                    return null;
-                    """
-
-                    start_button = self.driver.execute_script(find_button_script)
-
-                    if start_button:
-                        logger.info("[SUCCESS]Found 'Start Planting' button!")
-                        logger.info("Clicking 'Start Planting' button...")
-
-                        # Click the button
-                        self.driver.execute_script("arguments[0].click();", start_button)
-                        time.sleep(2)
-                        logger.info("[SUCCESS]Clicked 'Start Planting' button")
-
-                        # Navigate back to original site
-                        logger.info(f"Navigating back to site: {original_url}")
-                        max_retries = 3
-                        for back_attempt in range(max_retries):
-                            try:
-                                self.driver.get(original_url)
-                                time.sleep(2)
-                                logger.info("Back on site")
-                                break
-                            except TimeoutException as e:
-                                logger.error(f"Timeout navigating back (attempt {back_attempt + 1}/{max_retries}): {e}")
-                                if back_attempt < max_retries - 1:
-                                    logger.info(f"Retrying...")
-                                    time.sleep(1)
-                                else:
-                                    logger.error(f"Failed to navigate back after timeout")
-                                    raise
-                            except RuntimeError as e:
-                                if "dictionary changed size during iteration" in str(e):
-                                    if back_attempt < max_retries - 1:
-                                        logger.warning(f"RuntimeError navigating back (selenium-wire cert bug)")
-                                        logger.info(f"Retrying...")
-                                        time.sleep(0.5)
-                                    else:
-                                        logger.error(f"Failed to navigate back after clicking button")
-                                        return False
-                                else:
-                                    raise
-
-                        return True
-                    else:
-                        logger.error("'Start Planting' button not found in popup!")
-                        logger.error("Extension activation failed. Exiting script.")
-                        sys.exit(1)
-
-                except Exception as e:
-                    logger.error(f"Error finding/clicking 'Start Planting' button: {e}")
-                    import traceback
-                    traceback.print_exc()
-                    logger.error("Extension activation failed. Exiting script.")
-                    sys.exit(1)
-
-            else:
-                # SupportWithMellowtel: Just wait for popup to appear, no interaction needed
-                logger.info("SupportWithMellowtel popup opened. No interaction required.")
-                time.sleep(3)  # Wait for popup to fully load
-
-                # Navigate back to original site
-                logger.info(f"Navigating back to site: {original_url}")
-                max_retries = 3
-                for back_attempt in range(max_retries):
                     try:
-                        self.driver.get(original_url)
+                        find_agree_button_script = """
+                        const buttons = document.querySelectorAll('button');
+                        for (let button of buttons) {
+                            const innerText = (button.innerText || '').trim();
+                            const textContent = (button.textContent || '').trim();
+
+                            if (innerText.toLowerCase().includes('agree and continue') ||
+                                textContent.toLowerCase().includes('agree and continue')) {
+                                return button;
+                            }
+                        }
+                        return null;
+                        """
+
+                        agree_button = self.driver.execute_script(find_agree_button_script)
+
+                        if agree_button:
+                            logger.info("[SUCCESS]Found 'Agree and continue' button!")
+                            self.driver.execute_script("arguments[0].click();", agree_button)
+                            time.sleep(2)
+                            logger.info("[SUCCESS]Clicked 'Agree and continue' button")
+                        else:
+                            logger.warning("'Agree and continue' button not found in opt-in page")
+
+                    except Exception as e:
+                        logger.warning(f"Error clicking 'Agree and continue' button: {e}")
+
+                    break
+
+            # Step 2: If no auto-opened tab, use popup approach
+            if not opt_in_tab_found:
+                logger.info("No auto-opened opt-in tab found, using popup approach...")
+                popup_url = f"chrome-extension://{self.extension_id}/popup.html"
+
+                # Navigate to popup
+                logger.info(f"Opening extension popup...")
+                max_retries = 3
+                for popup_attempt in range(max_retries):
+                    try:
+                        self.driver.get(popup_url)
                         time.sleep(2)
-                        logger.info("Back on site")
+                        logger.info(f"[SUCCESS]Navigated to extension popup: {popup_url}")
                         break
                     except TimeoutException as e:
-                        logger.error(f"Timeout navigating back (attempt {back_attempt + 1}/{max_retries}): {e}")
-                        if back_attempt < max_retries - 1:
+                        logger.error(f"Timeout opening popup (attempt {popup_attempt + 1}/{max_retries}): {e}")
+                        if popup_attempt < max_retries - 1:
                             logger.info(f"Retrying...")
                             time.sleep(1)
                         else:
-                            logger.error(f"Failed to navigate back after timeout")
+                            logger.error(f"Failed to open popup after timeout")
                             raise
                     except RuntimeError as e:
                         if "dictionary changed size during iteration" in str(e):
-                            if back_attempt < max_retries - 1:
-                                logger.warning(f"RuntimeError navigating back (selenium-wire cert bug)")
+                            if popup_attempt < max_retries - 1:
+                                logger.warning(f"RuntimeError opening popup (selenium-wire cert bug) on attempt {popup_attempt + 1}/{max_retries}")
                                 logger.info(f"Retrying...")
                                 time.sleep(0.5)
                             else:
-                                logger.error(f"Failed to navigate back")
+                                logger.error(f"Failed to open popup after {max_retries} attempts")
                                 return False
                         else:
                             raise
 
-                return True
+                # Click mellowtel-settings button
+                logger.info("Looking for mellowtel-settings button...")
+                time.sleep(1)
+
+                try:
+                    find_settings_button_script = """
+                    const settingsButton = document.getElementById('mellowtel-settings');
+                    return settingsButton;
+                    """
+
+                    settings_button = self.driver.execute_script(find_settings_button_script)
+
+                    if settings_button:
+                        logger.info("[SUCCESS]Found mellowtel-settings button!")
+                        self.driver.execute_script("arguments[0].click();", settings_button)
+                        logger.info("[SUCCESS]Clicked mellowtel-settings button")
+
+                        # Wait 2 seconds for settings page to open
+                        time.sleep(2)
+
+                        # Check for opt-in-txt div and click it
+                        logger.info("Checking for opt-in-txt div...")
+                        find_optin_div_script = """
+                        const optinDiv = document.getElementById('opt-in-txt');
+                        return optinDiv;
+                        """
+
+                        optin_div = self.driver.execute_script(find_optin_div_script)
+
+                        if optin_div:
+                            logger.info("[SUCCESS]Found opt-in-txt div!")
+                            self.driver.execute_script("arguments[0].click();", optin_div)
+                            logger.info("[SUCCESS]Clicked opt-in-txt div")
+                            time.sleep(1)
+                        else:
+                            logger.info("opt-in-txt div not found (may already be opted in)")
+                    else:
+                        logger.warning("mellowtel-settings button not found in popup")
+
+                except Exception as e:
+                    logger.warning(f"Error during popup activation: {e}")
+                    import traceback
+                    traceback.print_exc()
+
+            # Step 3: Navigate back to original site
+            logger.info(f"Navigating back to site: {original_url}")
+            max_retries = 3
+            for back_attempt in range(max_retries):
+                try:
+                    self.driver.get(original_url)
+                    time.sleep(2)
+                    logger.info("Back on site")
+                    break
+                except TimeoutException as e:
+                    logger.error(f"Timeout navigating back (attempt {back_attempt + 1}/{max_retries}): {e}")
+                    if back_attempt < max_retries - 1:
+                        logger.info(f"Retrying...")
+                        time.sleep(1)
+                    else:
+                        logger.error(f"Failed to navigate back after timeout")
+                        raise
+                except RuntimeError as e:
+                    if "dictionary changed size during iteration" in str(e):
+                        if back_attempt < max_retries - 1:
+                            logger.warning(f"RuntimeError navigating back (selenium-wire cert bug)")
+                            logger.info(f"Retrying...")
+                            time.sleep(0.5)
+                        else:
+                            logger.error(f"Failed to navigate back")
+                            return False
+                    else:
+                        raise
+
+            return True
 
         except Exception as e:
             logger.error(f"Error activating extension: {e}")
@@ -1219,7 +1215,7 @@ class NetworkAnalyzer:
     def visit_site(self, url: str):
         """Visit a single site and monitor for the full duration."""
         logger.info(f"\nVisiting: {url}")
-        logger.info(f"Monitoring duration: {self.monitoring_duration} seconds ({self.monitoring_duration / 86400:.1f} days)")
+        logger.info(f"Monitoring duration: {self.monitoring_duration} seconds ({self.monitoring_duration / 3600:.1f} hours)")
 
         # Timeout retry loop - reinitialize driver on timeout
         max_timeout_retries = 2
@@ -1428,11 +1424,11 @@ class NetworkAnalyzer:
     def run_experiment(self):
         """Main experiment execution."""
         logger.info("=" * 70)
-        logger.info("Mellowtel SDK Network Analysis Tool - 5-Day Long Duration Mode")
+        logger.info("Mellowtel SDK Network Analysis Tool - 23-Hour Long Duration Mode")
         logger.info("=" * 70)
         logger.info(f"Configuration:")
         logger.info(f"  - Iframe detection polling: every {self.iframe_poll_interval} seconds")
-        logger.info(f"  - Monitoring duration: {self.monitoring_duration} seconds ({self.monitoring_duration / 86400:.1f} days)")
+        logger.info(f"  - Monitoring duration: {self.monitoring_duration} seconds ({self.monitoring_duration / 3600:.1f} hours)")
         logger.info(f"  - Target site: https://yasirzaki.net (hardcoded)")
         logger.info(f"  - Headless mode: {self.headless}")
         logger.info(f"  - Disable images: {self.disable_images}")
