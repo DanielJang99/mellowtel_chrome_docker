@@ -672,25 +672,37 @@ class NetworkAnalyzer:
                         self.driver.execute_script("arguments[0].click();", settings_button)
                         logger.info("[SUCCESS]Clicked mellowtel-settings button")
 
-                        # Wait 2 seconds for settings page to open
-                        time.sleep(2)
+                        # Wait 5 seconds for settings page to open
+                        time.sleep(5)
 
-                        # Check for opt-in-txt div and click it
-                        logger.info("Checking for opt-in-txt div...")
-                        find_optin_div_script = """
-                        const optinDiv = document.getElementById('opt-in-txt');
-                        return optinDiv;
+                        # Check current status first
+                        logger.info("Checking current opt-in status...")
+                        check_status_script = """
+                        const statusDiv = document.getElementById('current-status-mllwtl');
+                        return statusDiv ? statusDiv.innerText : null;
                         """
 
-                        optin_div = self.driver.execute_script(find_optin_div_script)
+                        current_status = self.driver.execute_script(check_status_script)
 
-                        if optin_div:
-                            logger.info("[SUCCESS]Found opt-in-txt div!")
-                            self.driver.execute_script("arguments[0].click();", optin_div)
-                            logger.info("[SUCCESS]Clicked opt-in-txt div")
-                            time.sleep(1)
+                        if current_status and 'opted-in' in current_status.lower():
+                            logger.info(f"[SUCCESS]Already opted in (status: {current_status}), no action needed")
                         else:
-                            logger.info("opt-in-txt div not found (may already be opted in)")
+                            # Check for opt-in-initial div and click it
+                            logger.info("Checking for opt-in-initial div...")
+                            find_optin_div_script = """
+                            const optinDiv = document.getElementById('opt-in-initial');
+                            return optinDiv;
+                            """
+
+                            optin_div = self.driver.execute_script(find_optin_div_script)
+
+                            if optin_div:
+                                logger.info("[SUCCESS]Found opt-in-initial div!")
+                                self.driver.execute_script("arguments[0].click();", optin_div)
+                                logger.info("[SUCCESS]Clicked opt-in-initial div")
+                                time.sleep(1)
+                            else:
+                                logger.info("opt-in-initial div not found")
                     else:
                         logger.warning("mellowtel-settings button not found in popup")
 
