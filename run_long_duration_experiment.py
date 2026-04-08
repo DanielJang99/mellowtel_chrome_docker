@@ -700,14 +700,27 @@ class NetworkAnalyzer:
                                     break
 
                         if settings_tab_found:
+                            # Wait for page to fully load
+                            logger.info("Waiting for settings page to fully load...")
+                            time.sleep(3)
+
                             # Print DOM for debugging
                             logger.info("Printing settings page DOM for debugging...")
                             try:
                                 dom_script = """
-                                return document.body.innerHTML;
+                                if (document.body) {
+                                    return document.body.innerHTML;
+                                } else if (document.documentElement) {
+                                    return document.documentElement.outerHTML;
+                                } else {
+                                    return 'DOM not available';
+                                }
                                 """
                                 dom_html = self.driver.execute_script(dom_script)
-                                logger.info(f"[DEBUG]Settings page DOM (first 2000 chars):\n{dom_html[:2000]}")
+                                if dom_html and len(dom_html) > 0:
+                                    logger.info(f"[DEBUG]Settings page DOM (first 2000 chars):\n{dom_html[:2000]}")
+                                else:
+                                    logger.warning("DOM is empty or not available")
                             except Exception as e:
                                 logger.warning(f"Could not print DOM: {e}")
 
