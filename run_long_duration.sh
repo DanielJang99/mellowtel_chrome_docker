@@ -9,6 +9,7 @@ LOG_FILE="$PROJECT_DIR/logs_v2/mellowtel_long_duration_${TIMESTAMP}.log"
 # Parse command-line arguments
 export ENABLE_TC=false
 export ENABLE_RATE_LIMIT=false
+export EXPERIMENT_TYPE=long_duration
 
 for arg in "$@"; do
     case "$arg" in

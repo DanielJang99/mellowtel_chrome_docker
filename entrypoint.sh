@@ -197,17 +197,51 @@ echo "Starting Mellowtel Analysis Experiment"
 echo "========================================"
 echo ""
 
-# Randomly select experiment type: 0=multi-site, 1=single-site
-EXPERIMENT_CHOICE=$((RANDOM % 2))
+# Check if EXPERIMENT_TYPE is set, default to "random"
+EXPERIMENT_TYPE=${EXPERIMENT_TYPE:-random}
 
-case $EXPERIMENT_CHOICE in
-    0)
+case $EXPERIMENT_TYPE in
+    long_duration)
+        EXPERIMENT_SCRIPT="run_long_duration_experiment.py"
+        echo "[INFO] Experiment type: Long Duration (5 days on yasirzaki.net)"
+        ;;
+    single_site)
+        EXPERIMENT_SCRIPT="run_single_site_experiment.py"
+        echo "[INFO] Experiment type: Single-site (40 minutes)"
+        ;;
+    multi_site)
         EXPERIMENT_SCRIPT="run_experiment.py"
         echo "[INFO] Experiment type: Multi-site (5 minutes each)"
         ;;
-    1)
-        EXPERIMENT_SCRIPT="run_single_site_experiment.py"
-        echo "[INFO] Experiment type: Single-site (40 minutes)"
+    random)
+        # Randomly select experiment type: 0=multi-site, 1=single-site
+        EXPERIMENT_CHOICE=$((RANDOM % 2))
+
+        case $EXPERIMENT_CHOICE in
+            0)
+                EXPERIMENT_SCRIPT="run_experiment.py"
+                echo "[INFO] Experiment type: Multi-site (5 minutes each) [randomly selected]"
+                ;;
+            1)
+                EXPERIMENT_SCRIPT="run_single_site_experiment.py"
+                echo "[INFO] Experiment type: Single-site (40 minutes) [randomly selected]"
+                ;;
+        esac
+        ;;
+    *)
+        echo "[WARNING] Unknown EXPERIMENT_TYPE: ${EXPERIMENT_TYPE}, defaulting to random selection"
+        EXPERIMENT_CHOICE=$((RANDOM % 2))
+
+        case $EXPERIMENT_CHOICE in
+            0)
+                EXPERIMENT_SCRIPT="run_experiment.py"
+                echo "[INFO] Experiment type: Multi-site (5 minutes each) [randomly selected]"
+                ;;
+            1)
+                EXPERIMENT_SCRIPT="run_single_site_experiment.py"
+                echo "[INFO] Experiment type: Single-site (40 minutes) [randomly selected]"
+                ;;
+        esac
         ;;
 esac
 
