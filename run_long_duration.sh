@@ -54,7 +54,7 @@ fi
 
 # Run docker-compose
 echo "$(date): Starting new container for 5-day experiment..." >> "$LOG_FILE"
-sudo ENABLE_TC=$ENABLE_TC ENABLE_RATE_LIMIT=$ENABLE_RATE_LIMIT docker-compose up >> "$LOG_FILE" 2>&1
+sudo ENABLE_TC=$ENABLE_TC ENABLE_RATE_LIMIT=$ENABLE_RATE_LIMIT EXPERIMENT_TYPE=$EXPERIMENT_TYPE docker-compose up >> "$LOG_FILE" 2>&1
 EXIT_CODE=$?
 
 # Clean up

@@ -19,6 +19,7 @@ services:
       - DISPLAY=:99  # Virtual display provided by Xvfb
       - ENABLE_TC=${ENABLE_TC:-false}  # Enable traffic control latency simulation
       - ENABLE_RATE_LIMIT=${ENABLE_RATE_LIMIT:-false}  # Enable download bandwidth rate limiting
+      - EXPERIMENT_TYPE=${EXPERIMENT_TYPE:-random}  # Experiment type: long_duration, single_site, multi_site, or random
     shm_size: 3gb  # Increase shared memory size for Chrome
     security_opt:
       - seccomp:unconfined  # Required for Chrome sandbox in some environments
