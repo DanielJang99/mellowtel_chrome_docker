@@ -672,37 +672,76 @@ class NetworkAnalyzer:
                         self.driver.execute_script("arguments[0].click();", settings_button)
                         logger.info("[SUCCESS]Clicked mellowtel-settings button")
 
-                        # Wait 5 seconds for settings page to open
-                        time.sleep(5)
+                        # Wait for settings page to open
+                        time.sleep(3)
 
-                        # Check current status first
-                        logger.info("Checking current opt-in status...")
-                        check_status_script = """
-                        const statusDiv = document.getElementById('current-status-mllwtl');
-                        return statusDiv ? statusDiv.innerText : null;
-                        """
+                        # Find the settings page tab
+                        logger.info("Looking for settings page tab...")
+                        settings_tab_found = False
+                        current_url = self.driver.current_url
 
-                        current_status = self.driver.execute_script(check_status_script)
-
-                        if current_status and 'opted-in' in current_status.lower():
-                            logger.info(f"[SUCCESS]Already opted in (status: {current_status}), no action needed")
+                        # Check if current tab is the settings page
+                        if 'mellow.tel/settings' in current_url:
+                            logger.info(f"[SUCCESS]Settings page opened in current tab: {current_url}")
+                            settings_tab_found = True
                         else:
-                            # Check for opt-in-initial div and click it
-                            logger.info("Checking for opt-in-initial div...")
-                            find_optin_div_script = """
-                            const optinDiv = document.getElementById('opt-in-initial');
-                            return optinDiv;
+                            logger.info(f"Current tab is not settings page: {current_url}")
+                            logger.info("Checking other tabs for settings page...")
+
+                            # Check all other tabs
+                            all_windows = self.driver.window_handles
+                            for window_handle in all_windows:
+                                self.driver.switch_to.window(window_handle)
+                                tab_url = self.driver.current_url
+
+                                if 'mellow.tel/settings' in tab_url:
+                                    logger.info(f"[SUCCESS]Found settings page in tab: {tab_url}")
+                                    settings_tab_found = True
+                                    break
+
+                        if settings_tab_found:
+                            # Print DOM for debugging
+                            logger.info("Printing settings page DOM for debugging...")
+                            try:
+                                dom_script = """
+                                return document.body.innerHTML;
+                                """
+                                dom_html = self.driver.execute_script(dom_script)
+                                logger.info(f"[DEBUG]Settings page DOM (first 2000 chars):\n{dom_html[:2000]}")
+                            except Exception as e:
+                                logger.warning(f"Could not print DOM: {e}")
+
+                            # Check current status first
+                            logger.info("Checking current opt-in status...")
+                            check_status_script = """
+                            const statusDiv = document.getElementById('current-status-mllwtl');
+                            return statusDiv ? statusDiv.innerText : null;
                             """
 
-                            optin_div = self.driver.execute_script(find_optin_div_script)
+                            current_status = self.driver.execute_script(check_status_script)
 
-                            if optin_div:
-                                logger.info("[SUCCESS]Found opt-in-initial div!")
-                                self.driver.execute_script("arguments[0].click();", optin_div)
-                                logger.info("[SUCCESS]Clicked opt-in-initial div")
-                                time.sleep(1)
+                            if current_status and 'opted-in' in current_status.lower():
+                                logger.info(f"[SUCCESS]Already opted in (status: {current_status}), no action needed")
                             else:
-                                logger.info("opt-in-initial div not found")
+                                logger.info(f"Current status: {current_status}")
+                                # Check for opt-in-initial div and click it
+                                logger.info("Checking for opt-in-initial div...")
+                                find_optin_div_script = """
+                                const optinDiv = document.getElementById('opt-in-initial');
+                                return optinDiv;
+                                """
+
+                                optin_div = self.driver.execute_script(find_optin_div_script)
+
+                                if optin_div:
+                                    logger.info("[SUCCESS]Found opt-in-initial div!")
+                                    self.driver.execute_script("arguments[0].click();", optin_div)
+                                    logger.info("[SUCCESS]Clicked opt-in-initial div")
+                                    time.sleep(1)
+                                else:
+                                    logger.info("opt-in-initial div not found in DOM")
+                        else:
+                            logger.warning("Settings page tab not found in any window")
                     else:
                         logger.warning("mellowtel-settings button not found in popup")
 
