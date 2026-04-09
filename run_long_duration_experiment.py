@@ -718,7 +718,7 @@ class NetworkAnalyzer:
                                 """
                                 dom_html = self.driver.execute_script(dom_script)
                                 if dom_html and len(dom_html) > 0:
-                                    logger.info(f"[DEBUG]Settings page DOM (first 2000 chars):\n{dom_html[:2000]}")
+                                    logger.info(f"Settings page DOM loaded")
                                 else:
                                     logger.warning("DOM is empty or not available")
                             except Exception as e:
