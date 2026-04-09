@@ -203,7 +203,11 @@ EXPERIMENT_TYPE=${EXPERIMENT_TYPE:-random}
 case $EXPERIMENT_TYPE in
     long_duration)
         EXPERIMENT_SCRIPT="run_long_duration_experiment.py"
-        echo "[INFO] Experiment type: Long Duration (5 days on yasirzaki.net)"
+        echo "[INFO] Experiment type: Long Duration (23 hours on yasirzaki.net)"
+        ;;
+    userdata)
+        EXPERIMENT_SCRIPT="run_mellowtel_userdata_capture.py"
+        echo "[INFO] Experiment type: User Data Capture (23 hours on yasirzaki.net with SupportWithMellowtel)"
         ;;
     single_site)
         EXPERIMENT_SCRIPT="run_single_site_experiment.py"
