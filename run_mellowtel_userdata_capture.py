@@ -1282,10 +1282,13 @@ class NetworkAnalyzer:
                 logger.info(f"Extension activated.")
 
             logger.info(f"Monitoring for Mellowtel iframe injection for {self.monitoring_duration} seconds...")
+            logger.info(f"Page will refresh every 5 minutes to maintain extension activity")
 
             # Poll for Mellowtel iframe detection continuously
             elapsed = 0
             total_iframes_found = 0
+            last_refresh_time = time.time()
+            page_refresh_interval = 5 * 60  # 5 minutes in seconds
 
             while elapsed < self.monitoring_duration:
                 iframe_data_list = self.check_for_mellowtel_iframes()
@@ -1337,6 +1340,22 @@ class NetworkAnalyzer:
                 # Process new requests on each iteration
                 self.process_new_requests(url)
 
+                # Check if it's time to refresh the page (every 5 minutes)
+                current_time = time.time()
+                time_since_last_refresh = current_time - last_refresh_time
+
+                if time_since_last_refresh >= page_refresh_interval:
+                    try:
+                        logger.info(f"[REFRESH] Refreshing page after {int(time_since_last_refresh)} seconds...")
+                        self.driver.refresh()
+                        time.sleep(3)  # Wait for page to reload
+                        last_refresh_time = current_time
+                        logger.info("[REFRESH] Page refreshed successfully")
+                    except Exception as e:
+                        logger.warning(f"[REFRESH] Error refreshing page: {e}")
+                        # Continue monitoring even if refresh fails
+                        last_refresh_time = current_time
+
                 # Wait before next poll
                 time.sleep(self.iframe_poll_interval)
                 elapsed = int(time.time() - self.monitoring_start_time)
@@ -1382,6 +1401,7 @@ class NetworkAnalyzer:
         logger.info(f"  - Extension: {self.extension_name}")
         logger.info(f"  - Iframe detection polling: every {self.iframe_poll_interval} seconds")
         logger.info(f"  - Monitoring duration: {self.monitoring_duration} seconds ({self.monitoring_duration / 3600:.1f} hours)")
+        logger.info(f"  - Page refresh interval: every 5 minutes")
         logger.info(f"  - Target site: https://yasirzaki.net (hardcoded)")
         logger.info(f"  - Headless mode: {self.headless}")
         logger.info(f"  - Disable images: {self.disable_images}")
