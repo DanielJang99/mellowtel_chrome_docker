@@ -832,7 +832,7 @@ class NetworkAnalyzer:
     def check_for_mellowtel_iframes(self) -> List[Dict[str, str]]:
         """
         Check DOM for iframes with 'mllwtl' in their id or data-id attributes.
-        Returns list of iframe metadata dictionaries.
+        Returns list of iframe metadata dictionaries with all HTML attributes.
         """
         try:
             script = """
@@ -846,10 +846,17 @@ class NetworkAnalyzer:
                 if (id.includes('mllwtl') || dataId.includes('mllwtl')) {
                     const src = iframe.getAttribute('src') || '';
                     if (src) {
+                        // Extract all attributes
+                        const allAttributes = {};
+                        for (let attr of iframe.attributes) {
+                            allAttributes[attr.name] = attr.value;
+                        }
+
                         mellowtelIframes.push({
                             src: src,
                             id: id,
-                            dataId: dataId
+                            dataId: dataId,
+                            allAttributes: allAttributes
                         });
                     }
                 }
@@ -905,7 +912,7 @@ class NetworkAnalyzer:
     def update_iframe_metadata(self, iframe_data: Dict[str, str], current_time: float):
         """
         Update iframe metadata with current timestamp.
-        Tracks first_seen and last_seen times.
+        Tracks first_seen and last_seen times, plus all HTML attributes.
         """
         src = iframe_data['src']
 
@@ -916,6 +923,7 @@ class NetworkAnalyzer:
                 'src': src,
                 'id': iframe_data['id'],
                 'data_id': iframe_data['dataId'],
+                'all_attributes': iframe_data.get('allAttributes', {}),
                 'domain': domain,
                 'first_seen': current_time,
                 'last_seen': current_time
@@ -955,7 +963,8 @@ class NetworkAnalyzer:
                     'domain': metadata['domain'],
                     'first_seen': metadata['first_seen'],
                     'last_seen': metadata['last_seen'],
-                    'duration_seconds': duration
+                    'duration_seconds': duration,
+                    'all_attributes': metadata.get('all_attributes', {})
                 }
 
                 # Write as JSON Lines format
@@ -985,7 +994,8 @@ class NetworkAnalyzer:
                             'domain': metadata['domain'],
                             'first_seen': metadata['first_seen'],
                             'last_seen': metadata['last_seen'],
-                            'duration_seconds': duration
+                            'duration_seconds': duration,
+                            'all_attributes': metadata.get('all_attributes', {})
                         }
 
                         # Write as JSON Lines format
